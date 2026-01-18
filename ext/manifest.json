@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "D365 Xrm Helper",
+  "version": "1.2",
+  "description": "תוסף אחוד לניהול Xrm, שליפת רישיונות ואוטומציה ב-Dynamics 365.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.dynamics.com/*",
+    "https://*.crm4.dynamics.com/*",
+    "https://syn.eladsoftware.com/*"
+  ],
+  "icons": {
+  
+    "16": "icons/images.png",
+    "32": "icons/images.png",
+    "48": "icons/images.png",
+    "128": "icons/images.png"
+    
+  },
+  "action": {
+    "default_popup": "popup.html",
+     "default_icon": {
+    "16": "icons/images.png",
+    "32": "icons/images.png",
+    "48": "icons/images.png",
+    "128": "icons/images.png"
+  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.dynamics.com/*",
+        "https://*.crm4.dynamics.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "bridge.js"
+      ],
+      "matches": [
+        "https://*.dynamics.com/*",
+        "https://*.crm4.dynamics.com/*"
+      ]
+    }
+  ]
+}
