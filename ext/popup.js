@@ -1745,3 +1745,166 @@ document.getElementById("getSystemParam").addEventListener("click", async () => 
     }
   });
 });
+document.getElementById("shareExt").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: () => {
+      const GITHUB_URL = "https://github.com/roivaldman1/D365-Extention/tree/main"; // <-- put your link
+
+      // remove existing modal
+      document.getElementById("__d365helper_share_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_share_modal";
+      overlay.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,.35);
+        z-index: 2147483647; display: flex; align-items: center; justify-content: center; padding: 16px;
+      `;
+
+      const box = document.createElement("div");
+      box.style.cssText = `
+        width: min(780px, 96vw);
+        background: #fff;
+        border-radius: 14px;
+        box-shadow: 0 18px 50px rgba(0,0,0,.35);
+        overflow: hidden;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        direction: rtl;
+        text-align: right;
+      `;
+
+      const header = document.createElement("div");
+      header.style.cssText = `padding: 12px 14px; font-weight: 900; border-bottom: 1px solid #e5e7eb;`;
+      header.textContent = "Share / Install Instructions";
+
+      const body = document.createElement("div");
+      body.style.cssText = `padding: 12px 14px; display: grid; gap: 10px;`;
+
+      const text = [
+        "📌 איך להתקין את התוסף:",
+        "1) פתח Chrome והיכנס ל: chrome://extensions",
+        "2) הפעל Developer mode (בפינה למעלה)",
+        "3) לחץ Load unpacked",
+        "4) בחר את תיקיית הפרויקט של התוסף",
+        "",
+        "✅ דרך GitHub:",
+        `- פתח את הריפו: ${GITHUB_URL}`,
+        "- או clone:",
+        `  git clone ${GITHUB_URL}`,
+        "",
+        "לאחר מכן: Load unpacked על התיקייה שנוצרה."
+      ].join("\n");
+
+      const ta = document.createElement("textarea");
+      ta.readOnly = true;
+      ta.value = text;
+      ta.style.cssText = `
+        width: 100%;
+        height: 260px;
+        resize: vertical;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre;
+        box-sizing: border-box;
+        font-family: Consolas, Monaco, "Courier New", monospace;
+        direction: ltr;
+        text-align: left;
+      `;
+
+      const linkRow = document.createElement("div");
+      linkRow.style.cssText = `display:flex; gap:10px; justify-content: space-between; align-items:center;`;
+
+      const a = document.createElement("a");
+      a.href = GITHUB_URL;
+      a.textContent = "Open GitHub Repo";
+      a.target = "_blank";
+      a.rel = "noreferrer";
+      a.style.cssText = `
+        font-weight: 900;
+        color: #2563eb;
+        text-decoration: none;
+      `;
+
+      const hint = document.createElement("div");
+      hint.textContent = "Tip: Ctrl+A ואז Ctrl+C כדי להעתיק הכול";
+      hint.style.cssText = `font-size:12px; color:#6b7280;`;
+
+      linkRow.appendChild(hint);
+      linkRow.appendChild(a);
+
+      body.appendChild(linkRow);
+      body.appendChild(ta);
+
+      const footer = document.createElement("div");
+      footer.style.cssText = `
+        display: flex; gap: 10px; justify-content: flex-end;
+        padding: 12px 14px; border-top: 1px solid #e5e7eb;
+      `;
+
+      const mkBtn = (text) => {
+        const b = document.createElement("button");
+        b.textContent = text;
+        b.style.cssText = `
+          border: 1px solid #cbd5e1;
+          padding: 10px 14px;
+          border-radius: 10px;
+          cursor: pointer;
+          background: #fff;
+          font-weight: 900;
+        `;
+        return b;
+      };
+
+      const btnClose = mkBtn("Close");
+
+      const btnCopy = mkBtn("Copy");
+      btnCopy.style.border = "none";
+      btnCopy.style.background = "#2563eb";
+      btnCopy.style.color = "#fff";
+
+      const btnOpen = mkBtn("Open GitHub");
+      btnOpen.style.border = "none";
+      btnOpen.style.background = "#111827";
+      btnOpen.style.color = "#fff";
+
+      const close = () => overlay.remove();
+      btnClose.onclick = close;
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+      btnCopy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(ta.value);
+          btnCopy.textContent = "Copied ✅";
+          setTimeout(() => (btnCopy.textContent = "Copy"), 900);
+        } catch {
+          ta.focus(); ta.select(); document.execCommand("copy");
+          btnCopy.textContent = "Copied ✅";
+          setTimeout(() => (btnCopy.textContent = "Copy"), 900);
+        }
+      };
+
+      btnOpen.onclick = () => window.open(GITHUB_URL, "_blank", "noreferrer");
+
+      footer.appendChild(btnClose);
+      footer.appendChild(btnCopy);
+      footer.appendChild(btnOpen);
+
+      box.appendChild(header);
+      box.appendChild(body);
+      box.appendChild(footer);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      // Auto-select for easy copy
+      ta.focus();
+      ta.select();
+    }
+  });
+});
