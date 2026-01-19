@@ -298,6 +298,8 @@ document.getElementById("getFieldValue").addEventListener("click", async () => {
 
   alert(text);
 });
+// If the user leaves "Fields" empty -> retrieveRecord WITHOUT $select (returns the full object)
+
 document.getElementById("retrieveByIdUi").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
@@ -306,7 +308,6 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
     target: { tabId: tab.id, allFrames: false },
     world: "MAIN",
     func: () => {
-      // remove existing modal if any
       document.getElementById("__d365helper_modal")?.remove();
 
       const overlay = document.createElement("div");
@@ -359,13 +360,12 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
       idInput.style.cssText = inputStyle;
 
       const fieldsInput = document.createElement("input");
-      fieldsInput.placeholder = "Fields (comma separated) e.g. firstname,lastname,emailaddress1";
+      fieldsInput.placeholder = "Fields (comma separated) e.g. firstname,lastname,emailaddress1  | leave empty = ALL fields";
       fieldsInput.style.cssText = inputStyle;
 
       const status = document.createElement("div");
       status.style.cssText = `font-size: 12px; color: #374151;`;
 
-      // result area
       const resultTa = document.createElement("textarea");
       resultTa.readOnly = true;
       resultTa.placeholder = "Result will appear here…";
@@ -387,7 +387,7 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
 
       body.appendChild(row("Entity", entityInput));
       body.appendChild(row("GUID", idInput));
-      body.appendChild(row("Fields", fieldsInput));
+      body.appendChild(row("Fields (optional)", fieldsInput));
       body.appendChild(status);
       body.appendChild(resultTa);
 
@@ -427,7 +427,6 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
       btnClose.onclick = close;
       overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
 
-      // Copy handler
       btnCopy.onclick = async () => {
         try {
           await navigator.clipboard.writeText(resultTa.value || "");
@@ -442,24 +441,19 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
         }
       };
 
-      // Retrieve handler (calls Xrm.WebApi from the SAME page context)
       btnRetrieve.onclick = async () => {
         const entityName = (entityInput.value || "").trim();
         const id = (idInput.value || "").trim().replace(/[{}]/g, "");
-        const fields = (fieldsInput.value || "")
-          .split(",")
-          .map(s => s.trim())
-          .filter(Boolean);
+        const rawFields = (fieldsInput.value || "").trim();
 
         status.textContent = "";
         resultTa.value = "";
 
-        if (!entityName || !id || !fields.length) {
-          status.textContent = "❌ Please fill Entity, GUID and at least one Field.";
+        if (!entityName || !id) {
+          status.textContent = "❌ Please fill Entity and GUID.";
           return;
         }
 
-        // Basic GUID sanity check
         if (!/^[0-9a-fA-F-]{36}$/.test(id)) {
           status.textContent = "❌ GUID looks invalid. Example: f557616e-26ec-e611-a8a7-0050568c00dc";
           return;
@@ -475,21 +469,37 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
 
         status.textContent = "⏳ Retrieving…";
 
-        // Strategy:
-        // - Try single $select first (fast)
-        // - If fails (often because one field is wrong) -> fallback to per-field retrieve
-        const select = fields.join(",");
+        // If empty => no $select => ALL fields (full object)
+        const fields = rawFields
+          ? rawFields.split(",").map(s => s.trim()).filter(Boolean)
+          : [];
 
         const formatOne = (f, rec) => {
           const raw = rec[f];
           const formatted = rec[`${f}@OData.Community.Display.V1.FormattedValue`];
           const lookupLn = rec[`${f}@Microsoft.Dynamics.CRM.lookuplogicalname`];
-          const shown = (formatted != null) ? `${formatted} (raw: ${JSON.stringify(raw)})` : JSON.stringify(raw);
+          const shown = (formatted != null)
+            ? `${formatted} (raw: ${JSON.stringify(raw)})`
+            : JSON.stringify(raw);
           const extra = lookupLn ? ` (lookup: ${lookupLn})` : "";
           return `${f}${extra} => ${shown}`;
         };
 
         try {
+          // ✅ ALL fields
+          if (fields.length === 0) {
+            const rec = await webApi.retrieveRecord(entityName, id);
+            resultTa.value =
+              `Entity: ${entityName}\nId: ${id}\n\n` +
+              JSON.stringify(rec, null, 2);
+            status.textContent = "✅ Done (ALL fields).";
+            resultTa.focus();
+            resultTa.select();
+            return;
+          }
+
+          // ✅ Selected fields (same behavior as before)
+          const select = fields.join(",");
           const rec = await webApi.retrieveRecord(entityName, id, `?$select=${select}`);
           const lines = fields.map(f => formatOne(f, rec));
 
@@ -499,7 +509,15 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
 
           status.textContent = `✅ Done (${fields.length} fields).`;
         } catch (err1) {
-          // fallback: per-field to survive wrong names
+          // fallback per-field if user provided fields (keep your logic)
+          if (fields.length === 0) {
+            status.textContent = "❌ Failed.";
+            resultTa.value =
+              "ERROR:\n" +
+              (err1?.message || err1?.toString?.() || "Unknown error");
+            return;
+          }
+
           const lines = [];
           for (const f of fields) {
             try {
@@ -529,11 +547,11 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
       overlay.appendChild(box);
       document.body.appendChild(overlay);
 
-      // UX: focus first input
       entityInput.focus();
     }
   });
 });
+
 // popup.js  (RetrieveMultiple UI button - FULL CODE)
 // Requires a button in popup.html: <button id="retrieveMultipleUi">RetrieveMultiple</button>
 
