@@ -425,7 +425,7 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
 
       const close = () => overlay.remove();
       btnClose.onclick = close;
-      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+      
 
       btnCopy.onclick = async () => {
         try {
@@ -566,13 +566,8 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
       // ---------- helpers ----------
       const normalizeFilter = (f) => {
         if (!f) return "";
-
-        // replace smart quotes with normal quotes
         f = f.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
-
-        // convert "value" to 'value'
         f = f.replace(/"([^"]*)"/g, "'$1'");
-
         return f.trim();
       };
 
@@ -581,6 +576,43 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
         if (typeof v === "string") return v;
         if (typeof v === "number" || typeof v === "boolean") return String(v);
         try { return JSON.stringify(v); } catch (e) { return String(v); }
+      };
+
+      const getShownVal = (row, key) => {
+        const fv = row?.[`${key}@OData.Community.Display.V1.FormattedValue`];
+        const v = (fv != null) ? fv : row?.[key];
+        return v;
+      };
+
+      const escapePipes = (s) => String(s ?? "").replace(/\|/g, "\\|");
+
+      // Parses the "Columns" input:
+      // - allows plain: col1,col2,col3
+      // - allows advanced: col1,col2&$expand=nav($select=name)&$orderby=createdon desc
+      const parseColumnsAndExtra = (input) => {
+        const raw = (input || "").trim();
+        if (!raw) return { cols: [], extraParts: [] };
+
+        // Split on first '&' (keep the rest as extra query)
+        const ampIndex = raw.indexOf("&");
+        let colsPart = raw;
+        let extra = "";
+
+        if (ampIndex !== -1) {
+          colsPart = raw.slice(0, ampIndex).trim();
+          extra = raw.slice(ampIndex + 1).trim(); // everything after &
+        }
+
+        const cols = colsPart
+          .split(",")
+          .map(s => s.trim())
+          .filter(Boolean);
+
+        const extraParts = extra
+          ? extra.split("&").map(s => s.trim()).filter(Boolean)
+          : [];
+
+        return { cols, extraParts };
       };
 
       // ---------- modal ----------
@@ -632,7 +664,8 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
       entityInput.style.cssText = inputStyle;
 
       const selectInput = document.createElement("input");
-      selectInput.placeholder = "Columns (comma) - leave empty to return ALL columns";
+      selectInput.placeholder =
+        "Columns (comma). You can also append: & $expand=... & $orderby=...  (example: col1,col2&$expand=nav($select=name))";
       selectInput.style.cssText = inputStyle;
 
       const filterInput = document.createElement("input");
@@ -666,7 +699,7 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
       `;
 
       body.appendChild(mkRow("Entity", entityInput));
-      body.appendChild(mkRow("Columns (optional)", selectInput));
+      body.appendChild(mkRow("Columns (+ optional & $expand=...)", selectInput));
       body.appendChild(mkRow("Filter (optional)", filterInput));
       body.appendChild(mkRow("Top (optional)", topInput));
       body.appendChild(status);
@@ -706,7 +739,7 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
 
       const close = () => overlay.remove();
       btnClose.onclick = close;
-      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+      
 
       btnCopy.onclick = async () => {
         try {
@@ -730,11 +763,7 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
 
         if (!entity) { status.textContent = "❌ Entity is required."; return; }
 
-        // columns: if empty -> return ALL columns (no $select param)
-        const cols = (selectInput.value || "")
-          .split(",")
-          .map(s => s.trim())
-          .filter(Boolean);
+        const { cols, extraParts } = parseColumnsAndExtra(selectInput.value || "");
 
         const top = topStr ? parseInt(topStr, 10) : null;
         if (topStr && (!Number.isFinite(top) || top <= 0)) {
@@ -749,11 +778,31 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
           return;
         }
 
-        // build query string
+        // build query string (supports $expand and any extra $... parts)
         const params = [];
         if (cols.length > 0) params.push(`$select=${encodeURIComponent(cols.join(","))}`);
         if (filter) params.push(`$filter=${encodeURIComponent(filter)}`);
         if (top) params.push(`$top=${encodeURIComponent(String(top))}`);
+
+        // Append extra parts like: $expand=... or $orderby=... or $select=...
+        // NOTE: keep it generic, but safe (encode key+value)
+        for (const p of extraParts) {
+          const part = p.replace(/^\?/, "").trim();
+          if (!part) continue;
+
+          // Allow "$expand=..." (most common)
+          const eqIdx = part.indexOf("=");
+          if (eqIdx === -1) {
+            params.push(encodeURIComponent(part));
+            continue;
+          }
+
+          const key = part.slice(0, eqIdx).trim();
+          const val = part.slice(eqIdx + 1).trim();
+          if (!key) continue;
+
+          params.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
+        }
 
         const query = params.length ? `?${params.join("&")}` : "";
 
@@ -776,45 +825,66 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
             return;
           }
 
-          // show columns:
-          // - if user chose columns => show those
-          // - else (all columns returned) => show keys of first row (up to 20 for readability)
+          // Columns to show:
+          // - if user chose columns => show them
+          // - else show keys from first row (up to 25)
           const shownCols = (cols.length > 0)
             ? cols
-            : Object.keys(rows[0]).filter(k => !k.startsWith("@")).slice(0, 20);
+            : Object.keys(rows[0]).filter(k => !k.startsWith("@")).slice(0, 25);
 
-          lines.push(shownCols.join(" | "));
-          lines.push(shownCols.map(() => "------------").join("-+-"));
+          // Pretty table with dynamic widths (better reading)
+          const colWidths = shownCols.map((c) => {
+            const headerW = c.length;
+            const maxCell = Math.max(
+              ...rows.slice(0, 200).map(r => safeString(getShownVal(r, c)).length)
+            );
+            return Math.min(Math.max(headerW, maxCell, 6), 40); // cap width 40
+          });
+
+          const pad = (s, w) => {
+            s = safeString(s);
+            if (s.length > w) return s.slice(0, Math.max(0, w - 1)) + "…";
+            return (s + " ".repeat(w)).slice(0, w);
+          };
+
+          lines.push(
+            shownCols.map((c, i) => pad(escapePipes(c), colWidths[i])).join(" | ")
+          );
+          lines.push(
+            shownCols.map((_, i) => "-".repeat(colWidths[i])).join("-+-")
+          );
 
           for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
-            const vals = shownCols.map(c => {
-              const fv = r[`${c}@OData.Community.Display.V1.FormattedValue`];
-              const v = (fv != null) ? fv : r[c];
-              return safeString(v);
+            const vals = shownCols.map((c, idx) => {
+              const v = getShownVal(r, c);
+              return pad(escapePipes(v), colWidths[idx]);
             });
             lines.push(vals.join(" | "));
             if (i >= 199) { lines.push("... (truncated to 200 rows)"); break; }
           }
 
-          // also dump full first row when returning ALL columns (helps debugging)
-          if (cols.length === 0) {
-            lines.push("\n--- FULL FIRST RECORD (JSON) ---\n");
-            try {
-              lines.push(JSON.stringify(rows[0], null, 2));
-            } catch (e) {
-              lines.push(String(rows[0]));
-            }
+          // JSON dump ALL rows (for discovery) - cap to 50 for sanity
+          lines.push("\n--- ALL RECORDS (JSON, up to 50) ---\n");
+          try {
+            const take = rows.slice(0, 50);
+            lines.push(JSON.stringify(take, null, 2));
+            if (rows.length > 50) lines.push(`\n... (${rows.length - 50} more not shown)`);
+          } catch (e) {
+            lines.push(String(rows));
           }
 
           resultTa.value = lines.join("\n");
           status.textContent = `✅ Done (${rows.length} rows).`;
+          resultTa.focus();
+          resultTa.select();
         } catch (err) {
           status.textContent = "❌ Failed.";
           resultTa.value =
             "ERROR:\n" +
             (err?.message || err?.toString?.() || "Unknown error") +
-            "\n\nTip: filter must be valid OData. For strings use single quotes: firstname eq 'Roi'";
+            "\n\nTip: Put ONLY columns in Columns. If you add expand, append like: & $expand=nav($select=name)\n" +
+            "Tip: filter must be valid OData. For strings use single quotes: firstname eq 'Roi'";
         }
       };
 
@@ -832,6 +902,8 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
     }
   });
 });
+
+
 // popup.js  (FetchXML UI button - FULL CODE, pretty output as CSV)
 // 1) Add a button in popup.html: <button id="fetchXmlUi">FetchXML</button>
 // 2) Paste this whole block into popup.js
@@ -1014,7 +1086,7 @@ document.getElementById("fetchXmlUi").addEventListener("click", async () => {
 
       const close = () => overlay.remove();
       btnClose.onclick = close;
-      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+      
 
       btnCopy.onclick = async () => {
         try {
@@ -1075,16 +1147,63 @@ document.getElementById("fetchXmlUi").addEventListener("click", async () => {
           const res = await webApi.retrieveMultipleRecords(entity, query);
           const rows = res?.entities || [];
 
-          const cols = rows.length
-            ? Object.keys(rows[0]).filter(k => !k.startsWith("@"))
-            : [];
+          // ---------- Pretty output helpers ----------
+          const safeString = (v) => {
+            if (v == null) return "";
+            if (typeof v === "string") return v;
+            if (typeof v === "number" || typeof v === "boolean") return String(v);
+            if (Array.isArray(v)) return `[Array(${v.length})]`;
+            try { return JSON.stringify(v); } catch { return String(v); }
+          };
 
+          const getPrettyValue = (rec, key) => {
+            const fv = rec[`${key}@OData.Community.Display.V1.FormattedValue`];
+            if (fv != null) return fv;
+
+            const v = rec[key];
+            if (v == null) return "";
+
+            if (typeof v === "object") {
+              if (Array.isArray(v)) return `[Array(${v.length})]`;
+              return "[Object]";
+            }
+            return String(v);
+          };
+
+          const baseKeys = (r) =>
+            Object.keys(r || {}).filter(k => !k.startsWith("@") && !k.includes("@"));
+
+          // union keys across rows for better discovery
+          const keySet = new Set();
+          for (const r of rows) for (const k of baseKeys(r)) keySet.add(k);
+          let cols = Array.from(keySet);
+
+          // nicer ordering (if present)
+          const preferredOrder = ["activityid", "subject", "scheduledend", "_regardingobjectid_value", "description"];
+          cols.sort((a, b) => {
+            const ia = preferredOrder.indexOf(a);
+            const ib = preferredOrder.indexOf(b);
+            if (ia !== -1 && ib !== -1) return ia - ib;
+            if (ia !== -1) return -1;
+            if (ib !== -1) return 1;
+            return a.localeCompare(b);
+          });
+
+          // limit table cols for readability; full discovery is in record blocks
+          const MAX_TABLE_COLS = 18;
+          const tableCols = cols.slice(0, MAX_TABLE_COLS);
+
+          const pad = (s, n) => {
+            s = (s ?? "").toString();
+            if (s.length > n) return s.slice(0, n - 1) + "…";
+            return s + " ".repeat(n - s.length);
+          };
+
+          // ---------- Build output ----------
           const lines = [];
           lines.push(`Entity: ${entity}`);
           lines.push(`Returned: ${rows.length} (max 5000)`);
-          lines.push(`Columns: ${cols.join(", ") || "(none)"}`);
-          lines.push("");
-          lines.push("=== CSV (copy to Excel) ===");
+          lines.push(`Query: ${query}`);
           lines.push("");
 
           if (!rows.length) {
@@ -1094,24 +1213,81 @@ document.getElementById("fetchXmlUi").addEventListener("click", async () => {
             return;
           }
 
-          // CSV header
-          lines.push(cols.map(escCsv).join(","));
+          // === TABLE ===
+          lines.push("=== TABLE (readable) ===");
+          lines.push("");
 
-          // CSV rows (up to 5000 is OK)
+          const colWidths = tableCols.map(c =>
+            Math.min(
+              34,
+              Math.max(
+                c.length,
+                ...rows.slice(0, 50).map(r => (getPrettyValue(r, c) || "").length)
+              )
+            )
+          );
+
+          lines.push(tableCols.map((c, i) => pad(c, colWidths[i])).join(" | "));
+          lines.push(tableCols.map((_, i) => "-".repeat(colWidths[i])).join("-+-"));
+
           for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
-            const rowCsv = cols.map(c => escCsv(getCell(r, c))).join(",");
-            lines.push(rowCsv);
+            lines.push(tableCols.map((c, j) => pad(getPrettyValue(r, c), colWidths[j])).join(" | "));
+            if (i >= 199) { lines.push("... (truncated table to 200 rows)"); break; }
           }
 
-          // Optional JSON first record for debugging
           lines.push("");
-          lines.push("=== First record (JSON) ===");
-          try { lines.push(JSON.stringify(rows[0], null, 2)); }
-          catch (e) { lines.push(String(rows[0])); }
+          lines.push(`(Table shows up to ${MAX_TABLE_COLS} columns. Full details below.)`);
+          lines.push("");
+
+          // === RECORD BLOCKS ===
+          lines.push("=== RECORDS (key/value + JSON) ===");
+          lines.push("");
+
+          const formatRecordBlock = (rec, idx) => {
+            const keys = baseKeys(rec).sort((a, b) => a.localeCompare(b));
+            const out = [];
+            out.push(`--- Record ${idx + 1} ---`);
+
+            // Special nice line for customers from alias "cust"
+            const custName = rec["cust.partyid@OData.Community.Display.V1.FormattedValue"];
+            const custType = rec["cust.partyid@Microsoft.Dynamics.CRM.lookuplogicalname"];
+            if (custName) out.push(`Customers => ${custName}${custType ? ` (${custType})` : ""}`);
+
+            for (const k of keys) {
+              const v = rec[k];
+              const fv = rec[`${k}@OData.Community.Display.V1.FormattedValue`];
+
+              if (typeof v === "object" && v != null) {
+                if (Array.isArray(v)) out.push(`${k} => [Array(${v.length})]`);
+                else out.push(`${k} => [Object]`);
+              } else {
+                const shown = (fv != null && fv !== "") ? `${fv} (raw: ${safeString(v)})` : safeString(v);
+                out.push(`${k} => ${shown}`);
+              }
+            }
+
+            out.push("");
+            out.push("JSON:");
+            try { out.push(JSON.stringify(rec, null, 2)); }
+            catch { out.push(String(rec)); }
+
+            return out.join("\n");
+          };
+
+          const MAX_RECORD_BLOCKS = 30;
+          for (let i = 0; i < Math.min(rows.length, MAX_RECORD_BLOCKS); i++) {
+            lines.push(formatRecordBlock(rows[i], i));
+            lines.push("");
+          }
+          if (rows.length > MAX_RECORD_BLOCKS) {
+            lines.push(`... (truncated record blocks to ${MAX_RECORD_BLOCKS} records)`);
+          }
 
           resultTa.value = lines.join("\n");
           status.textContent = `✅ Done (${rows.length} rows).`;
+          resultTa.focus();
+          resultTa.select();
         } catch (err) {
           status.textContent = "❌ Failed.";
           resultTa.value =
@@ -1135,6 +1311,16 @@ document.getElementById("fetchXmlUi").addEventListener("click", async () => {
     }
   });
 });
+
+
+
+
+
+
+
+
+
+
 document.getElementById("findLogicalByLabel").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
@@ -1244,7 +1430,7 @@ document.getElementById("findLogicalByLabel").addEventListener("click", async ()
 
       const close = () => overlay.remove();
       btnClose.onclick = close;
-      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+      
 
       btnCopy.onclick = async () => {
         try {
@@ -1453,7 +1639,7 @@ document.getElementById("findLabelByLogical").addEventListener("click", async ()
 
       const close = () => overlay.remove();
       btnClose.onclick = close;
-      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+      
 
       btnCopy.onclick = async () => {
         try {
@@ -1660,7 +1846,7 @@ document.getElementById("getSystemParam").addEventListener("click", async () => 
 
       const close = () => overlay.remove();
       btnClose.onclick = close;
-      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+      
 
       btnCopy.onclick = async () => {
         try {
@@ -1894,7 +2080,7 @@ document.getElementById("shareExt").addEventListener("click", async () => {
 
       const close = () => overlay.remove();
       btnClose.onclick = close;
-      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+      
 
       btnCopy.onclick = async () => {
         try {
