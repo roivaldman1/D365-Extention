@@ -41,7 +41,7 @@ document.getElementById("tabsname").addEventListener("click", async () => {
       }
     }
   });
-//test
+
   // 2) Pick the best frame (most tabs)
   const candidates = results
     .map(r => r.result)
@@ -1925,4 +1925,29 @@ document.getElementById("shareExt").addEventListener("click", async () => {
       ta.select();
     }
   });
+});
+document.getElementById("openAdvancedFind").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !tab?.url) return;
+
+  try {
+    const u = new URL(tab.url);
+
+    // ✅ org base: https://mhcsd.crm4.dynamics.com
+    const base = `${u.protocol}//${u.host}`;
+
+    // ✅ get appid from current URL
+    const appid = u.searchParams.get("appid");
+    if (!appid) {
+      alert("appid not found in current URL.\nOpen a D365 record with appid=... and try again.");
+      return;
+    }
+
+    // ✅ hard-coded rest
+    const advancedUrl = `${base}/main.aspx?appid=${appid}&pagetype=AdvancedFind#292681398`;
+
+    chrome.tabs.create({ url: advancedUrl });
+  } catch (e) {
+    alert("Failed to open Advanced Find.\n" + String(e));
+  }
 });
