@@ -1053,7 +1053,6 @@ document.getElementById("fetchXmlUi").addEventListener("click", async () => {
 
         const close = () => overlay.remove();
         btnClose.onclick = close;
-        overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
 
         let lastRows = [];
         let lastCols = [];
