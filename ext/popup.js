@@ -916,401 +916,296 @@ document.getElementById("fetchXmlUi").addEventListener("click", async () => {
     target: { tabId: tab.id, allFrames: false },
     world: "MAIN",
     func: () => {
-      // ---------- helpers ----------
-      const extractEntityNameFromFetch = (xml) => {
-        try {
-          const m = xml.match(/<entity[^>]*\sname\s*=\s*["']([^"']+)["']/i);
-          return m ? m[1] : null;
-        } catch {
-          return null;
-        }
+      // --- helpers ---
+      const remove = () => document.getElementById("__d365_fetchxml_modal")?.remove();
+
+      const escapeHtml = (s) =>
+        String(s ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+
+      const toCsv = (rows, cols) => {
+        const esc = (v) => {
+          const s = String(v ?? "");
+          const needs = /[",\n]/.test(s);
+          const out = s.replaceAll('"', '""');
+          return needs ? `"${out}"` : out;
+        };
+        const header = cols.map(esc).join(",");
+        const lines = rows.map(r => cols.map(c => esc(r?.[c])).join(","));
+        return [header, ...lines].join("\n");
       };
 
-      // Accept both: raw XML or JS concatenation style:  '...' + '...' + '...'
-      const normalizeFetchXml = (s) => {
-        s = (s || "").trim();
-        s = s.replace(/;+\s*$/, "");
+      const buildModal = () => {
+        remove();
 
-        // join JS concatenated chunks: '...' + '...'
-        s = s.replace(/'\s*\+\s*'/g, "");
-
-        // strip outer quotes if user pasted the entire expression with quotes
-        s = s.replace(/^'+|'+$/g, "");
-
-        // unescape
-        s = s.replace(/\\'/g, "'");
-
-        return s.trim();
-      };
-
-      // CSV escape
-      const escCsv = (v) => {
-        if (v == null) return "";
-        const s = String(v);
-        if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-        return s;
-      };
-
-      const getCell = (r, c) => {
-        const fv = r[`${c}@OData.Community.Display.V1.FormattedValue`];
-        const v = (fv != null) ? fv : r[c];
-        if (v == null) return "";
-        if (typeof v === "object") {
-          try { return JSON.stringify(v); } catch { return String(v); }
-        }
-        return v;
-      };
-
-      // ---------- modal ----------
-      document.getElementById("__d365helper_modal")?.remove();
-
-      const overlay = document.createElement("div");
-      overlay.id = "__d365helper_modal";
-      overlay.style.cssText = `
-        position: fixed; inset: 0; background: rgba(0,0,0,.35);
-        z-index: 2147483647; display: flex; align-items: center; justify-content: center; padding: 16px;
-      `;
-
-      const box = document.createElement("div");
-      box.style.cssText = `
-        width: min(1100px, 96vw); background: #fff; border-radius: 14px;
-        box-shadow: 0 18px 50px rgba(0,0,0,.35); overflow: hidden;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      `;
-
-      const header = document.createElement("div");
-      header.style.cssText = `padding: 12px 14px; font-weight: 800; border-bottom: 1px solid #e5e7eb;`;
-      header.textContent = "D365 FetchXML (WebApi)";
-
-      const body = document.createElement("div");
-      body.style.cssText = `padding: 12px 14px; display: grid; gap: 10px;`;
-
-      const label = document.createElement("div");
-      label.textContent = "Paste full FetchXML (or JS concatenation). Must include <entity name='...'>.";
-      label.style.cssText = `font-size: 12px; font-weight: 700; color: #111827;`;
-
-      const fetchTa = document.createElement("textarea");
-      fetchTa.placeholder =
-`<fetch top="10">
-  <entity name="contact">
-    <attribute name="fullname"/>
-    <attribute name="contactid"/>
-  </entity>
-</fetch>`;
-      fetchTa.style.cssText = `
-        width: 100%;
-        height: 220px;
-        resize: vertical;
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        padding: 10px;
-        font-size: 12px;
-        line-height: 1.4;
-        white-space: pre;
-        box-sizing: border-box;
-        font-family: Consolas, Monaco, "Courier New", monospace;
-        direction: ltr;
-        text-align: left;
-      `;
-
-      const topInput = document.createElement("input");
-      topInput.placeholder = "Top override (optional) e.g. 25  | leave empty to use FetchXML top";
-      topInput.style.cssText = `
-        width: 100%;
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        padding: 10px;
-        font-size: 13px;
-        box-sizing: border-box;
-      `;
-
-      const status = document.createElement("div");
-      status.style.cssText = `font-size: 12px; color: #374151;`;
-
-      const resultTa = document.createElement("textarea");
-      resultTa.readOnly = true;
-      resultTa.placeholder = "Results will appear here…";
-      resultTa.style.cssText = `
-        width: 100%;
-        height: 360px;
-        resize: vertical;
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        padding: 10px;
-        font-size: 12px;
-        line-height: 1.4;
-        white-space: pre;
-        box-sizing: border-box;
-        font-family: Consolas, Monaco, "Courier New", monospace;
-        direction: ltr;
-        text-align: left;
-      `;
-
-      body.appendChild(label);
-      body.appendChild(fetchTa);
-      body.appendChild(topInput);
-      body.appendChild(status);
-      body.appendChild(resultTa);
-
-      const footer = document.createElement("div");
-      footer.style.cssText = `
-        display: flex; gap: 10px; justify-content: flex-end;
-        padding: 12px 14px; border-top: 1px solid #e5e7eb;
-      `;
-
-      const btn = (text) => {
-        const b = document.createElement("button");
-        b.textContent = text;
-        b.style.cssText = `
-          border: 1px solid #cbd5e1;
-          padding: 10px 14px;
-          border-radius: 10px;
-          cursor: pointer;
-          background: #fff;
-          font-weight: 800;
+        const overlay = document.createElement("div");
+        overlay.id = "__d365_fetchxml_modal";
+        overlay.style.cssText = `
+          position: fixed; inset: 0; background: rgba(0,0,0,.35);
+          z-index: 2147483647; display:flex; align-items:center; justify-content:center; padding:16px;
         `;
-        return b;
-      };
 
-      const btnClose = btn("Close");
+        const box = document.createElement("div");
+        box.style.cssText = `
+          width: min(1200px, 96vw);
+          height: min(760px, 92vh);
+          background:#fff;
+          border-radius:16px;
+          box-shadow:0 18px 50px rgba(0,0,0,.35);
+          overflow:hidden;
+          font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+          direction: rtl;
+          text-align: right;
+          display:flex;
+          flex-direction:column;
+        `;
 
-      const btnCopy = btn("Copy");
-      btnCopy.style.border = "none";
-      btnCopy.style.background = "#2563eb";
-      btnCopy.style.color = "#fff";
+        const header = document.createElement("div");
+        header.style.cssText = `padding:12px 14px; font-weight:900; border-bottom:1px solid #e5e7eb;`;
+        header.textContent = "FetchXml Tester (table view)";
 
-      const btnRun = btn("Run FetchXML");
-      btnRun.style.border = "none";
-      btnRun.style.background = "#111827";
-      btnRun.style.color = "#fff";
+        const body = document.createElement("div");
+        body.style.cssText = `padding:12px 14px; display:grid; gap:10px; flex:1; min-height:0;`;
 
-      const close = () => overlay.remove();
-      btnClose.onclick = close;
-      
+        const fetchTa = document.createElement("textarea");
+        fetchTa.placeholder = "Paste full FetchXML here…";
+        fetchTa.style.cssText = `
+          width:100%; height:140px; resize:vertical;
+          border:1px solid #cbd5e1; border-radius:10px; padding:10px;
+          font-size:12px; line-height:1.4; box-sizing:border-box;
+          font-family: Consolas, Monaco, "Courier New", monospace;
+          direction:ltr; text-align:left; white-space:pre;
+        `;
 
-      btnCopy.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(resultTa.value || "");
+        const status = document.createElement("div");
+        status.style.cssText = `font-size:12px; color:#374151;`;
+
+        const tableWrap = document.createElement("div");
+        tableWrap.style.cssText = `
+          border:1px solid #cbd5e1;
+          border-radius:10px;
+          overflow:auto;
+          height: 100%;
+          min-height: 260px;
+        `;
+
+        const table = document.createElement("table");
+        table.style.cssText = `
+          width:100%;
+          border-collapse:collapse;
+          font-size:12px;
+          direction:ltr;
+          text-align:left;
+        `;
+        tableWrap.appendChild(table);
+
+        const rawTa = document.createElement("textarea");
+        rawTa.readOnly = true;
+        rawTa.placeholder = "Raw JSON (for copy) will appear here…";
+        rawTa.style.cssText = `
+          width:100%; height:140px; resize:vertical;
+          border:1px solid #cbd5e1; border-radius:10px; padding:10px;
+          font-size:12px; line-height:1.4; box-sizing:border-box;
+          font-family: Consolas, Monaco, "Courier New", monospace;
+          direction:ltr; text-align:left; white-space:pre;
+        `;
+
+        body.appendChild(fetchTa);
+        body.appendChild(status);
+        body.appendChild(tableWrap);
+        body.appendChild(rawTa);
+
+        const footer = document.createElement("div");
+        footer.style.cssText = `
+          display:flex; gap:10px; justify-content:flex-end;
+          padding:12px 14px; border-top:1px solid #e5e7eb;
+        `;
+
+        const mkBtn = (text) => {
+          const b = document.createElement("button");
+          b.textContent = text;
+          b.style.cssText = `
+            border:1px solid #cbd5e1; padding:10px 14px; border-radius:10px;
+            cursor:pointer; background:#fff; font-weight:900;
+          `;
+          return b;
+        };
+
+        const btnClose = mkBtn("Close");
+        const btnCopy = mkBtn("Copy Raw");
+        btnCopy.style.border = "none";
+        btnCopy.style.background = "#2563eb";
+        btnCopy.style.color = "#fff";
+
+        const btnCsv = mkBtn("Copy CSV");
+        btnCsv.style.border = "none";
+        btnCsv.style.background = "#059669";
+        btnCsv.style.color = "#fff";
+
+        const btnRun = mkBtn("Run");
+        btnRun.style.border = "none";
+        btnRun.style.background = "#111827";
+        btnRun.style.color = "#fff";
+
+        const close = () => overlay.remove();
+        btnClose.onclick = close;
+        overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+        let lastRows = [];
+        let lastCols = [];
+
+        btnCopy.onclick = async () => {
+          const text = rawTa.value || "";
+          try { await navigator.clipboard.writeText(text); }
+          catch { rawTa.focus(); rawTa.select(); document.execCommand("copy"); }
           btnCopy.textContent = "Copied ✅";
-          setTimeout(() => (btnCopy.textContent = "Copy"), 900);
-        } catch (e) {
-          resultTa.focus(); resultTa.select(); document.execCommand("copy");
-          btnCopy.textContent = "Copied ✅";
-          setTimeout(() => (btnCopy.textContent = "Copy"), 900);
-        }
-      };
+          setTimeout(() => (btnCopy.textContent = "Copy Raw"), 900);
+        };
 
-      btnRun.onclick = async () => {
-        const xmlRaw = (fetchTa.value || "").trim();
-        const topStr = (topInput.value || "").trim();
-
-        status.textContent = "";
-        resultTa.value = "";
-
-        if (!xmlRaw) { status.textContent = "❌ FetchXML is required."; return; }
-
-        // Normalize (handles '...' + '...' style too)
-        let xml = normalizeFetchXml(xmlRaw);
-
-        // Optional: override top by injecting/replacing top="N" on <fetch>
-        if (topStr) {
-          const top = parseInt(topStr, 10);
-          if (!Number.isFinite(top) || top <= 0) {
-            status.textContent = "❌ Top override must be a positive number.";
-            return;
+        btnCsv.onclick = async () => {
+          if (!lastRows.length || !lastCols.length) return;
+          const csv = toCsv(lastRows, lastCols);
+          try { await navigator.clipboard.writeText(csv); }
+          catch {
+            rawTa.value = csv;
+            rawTa.focus(); rawTa.select(); document.execCommand("copy");
           }
+          btnCsv.textContent = "CSV ✅";
+          setTimeout(() => (btnCsv.textContent = "Copy CSV"), 900);
+        };
 
-          if (/<fetch[^>]*\stop\s*=\s*["']\d+["']/i.test(xml)) {
-            xml = xml.replace(/(<fetch[^>]*\stop\s*=\s*["'])\d+(["'])/i, `$1${top}$2`);
-          } else {
-            xml = xml.replace(/<fetch\b/i, `<fetch top="${top}"`);
-          }
-        }
+        const renderTable = (rows) => {
+          table.innerHTML = "";
+          if (!rows.length) return;
 
-        const entity = extractEntityNameFromFetch(xml);
-        if (!entity) {
-          status.textContent = "❌ Could not detect entity name. Make sure you have <entity name='...'> inside the FetchXML.";
-          return;
-        }
+          // columns: union of keys from first 25 rows
+          const colSet = new Set();
+          rows.slice(0, 25).forEach(r => Object.keys(r || {}).forEach(k => colSet.add(k)));
+          const cols = Array.from(colSet);
+          lastCols = cols;
+          lastRows = rows;
 
-        const Xrm = window.Xrm;
-        const webApi = Xrm?.WebApi || Xrm?.WebApi?.online;
-        if (!webApi?.retrieveMultipleRecords) {
-          status.textContent = "❌ Xrm.WebApi.retrieveMultipleRecords not available.";
-          return;
-        }
-
-        status.textContent = "⏳ Running FetchXML…";
-
-        try {
-          const query = `?fetchXml=${encodeURIComponent(xml)}`;
-          const res = await webApi.retrieveMultipleRecords(entity, query);
-          const rows = res?.entities || [];
-
-          // ---------- Pretty output helpers ----------
-          const safeString = (v) => {
-            if (v == null) return "";
-            if (typeof v === "string") return v;
-            if (typeof v === "number" || typeof v === "boolean") return String(v);
-            if (Array.isArray(v)) return `[Array(${v.length})]`;
-            try { return JSON.stringify(v); } catch { return String(v); }
-          };
-
-          const getPrettyValue = (rec, key) => {
-            const fv = rec[`${key}@OData.Community.Display.V1.FormattedValue`];
-            if (fv != null) return fv;
-
-            const v = rec[key];
-            if (v == null) return "";
-
-            if (typeof v === "object") {
-              if (Array.isArray(v)) return `[Array(${v.length})]`;
-              return "[Object]";
-            }
-            return String(v);
-          };
-
-          const baseKeys = (r) =>
-            Object.keys(r || {}).filter(k => !k.startsWith("@") && !k.includes("@"));
-
-          // union keys across rows for better discovery
-          const keySet = new Set();
-          for (const r of rows) for (const k of baseKeys(r)) keySet.add(k);
-          let cols = Array.from(keySet);
-
-          // nicer ordering (if present)
-          const preferredOrder = ["activityid", "subject", "scheduledend", "_regardingobjectid_value", "description"];
-          cols.sort((a, b) => {
-            const ia = preferredOrder.indexOf(a);
-            const ib = preferredOrder.indexOf(b);
-            if (ia !== -1 && ib !== -1) return ia - ib;
-            if (ia !== -1) return -1;
-            if (ib !== -1) return 1;
-            return a.localeCompare(b);
+          // thead
+          const thead = document.createElement("thead");
+          const trh = document.createElement("tr");
+          cols.forEach(c => {
+            const th = document.createElement("th");
+            th.innerHTML = escapeHtml(c);
+            th.style.cssText = `
+              position: sticky; top: 0;
+              background: #0b1220;
+              color: #fff;
+              padding: 8px;
+              border-bottom: 1px solid rgba(255,255,255,.15);
+              white-space: nowrap;
+            `;
+            trh.appendChild(th);
           });
+          thead.appendChild(trh);
+          table.appendChild(thead);
 
-          // limit table cols for readability; full discovery is in record blocks
-          const MAX_TABLE_COLS = 18;
-          const tableCols = cols.slice(0, MAX_TABLE_COLS);
+          // tbody
+          const tbody = document.createElement("tbody");
+          rows.forEach((r, idx) => {
+            const tr = document.createElement("tr");
+            tr.style.background = idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+            cols.forEach(c => {
+              const td = document.createElement("td");
+              const v = r?.[c];
 
-          const pad = (s, n) => {
-            s = (s ?? "").toString();
-            if (s.length > n) return s.slice(0, n - 1) + "…";
-            return s + " ".repeat(n - s.length);
-          };
+              let cell = v;
+              if (typeof cell === "object" && cell !== null) {
+                try { cell = JSON.stringify(cell); } catch { cell = String(cell); }
+              }
 
-          // ---------- Build output ----------
-          const lines = [];
-          lines.push(`Entity: ${entity}`);
-          lines.push(`Returned: ${rows.length} (max 5000)`);
-          lines.push(`Query: ${query}`);
-          lines.push("");
+              td.innerHTML = escapeHtml(cell ?? "");
+              td.style.cssText = `
+                padding: 8px;
+                border-bottom: 1px solid #e5e7eb;
+                max-width: 420px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              `;
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+        };
 
-          if (!rows.length) {
-            lines.push("(no rows)");
-            resultTa.value = lines.join("\n");
-            status.textContent = "✅ Done (0 rows).";
+        btnRun.onclick = async () => {
+          status.textContent = "";
+          table.innerHTML = "";
+          rawTa.value = "";
+          lastRows = [];
+          lastCols = [];
+
+          const fetchXml = (fetchTa.value || "").trim();
+          if (!fetchXml) {
+            status.textContent = "❌ Paste FetchXML first.";
             return;
           }
 
-          // === TABLE ===
-          lines.push("=== TABLE (readable) ===");
-          lines.push("");
-
-          const colWidths = tableCols.map(c =>
-            Math.min(
-              34,
-              Math.max(
-                c.length,
-                ...rows.slice(0, 50).map(r => (getPrettyValue(r, c) || "").length)
-              )
-            )
-          );
-
-          lines.push(tableCols.map((c, i) => pad(c, colWidths[i])).join(" | "));
-          lines.push(tableCols.map((_, i) => "-".repeat(colWidths[i])).join("-+-"));
-
-          for (let i = 0; i < rows.length; i++) {
-            const r = rows[i];
-            lines.push(tableCols.map((c, j) => pad(getPrettyValue(r, c), colWidths[j])).join(" | "));
-            if (i >= 199) { lines.push("... (truncated table to 200 rows)"); break; }
+          const Xrm = window.Xrm;
+          const webApi = Xrm?.WebApi || Xrm?.WebApi?.online;
+          if (!webApi?.retrieveMultipleRecords) {
+            status.textContent = "❌ Xrm.WebApi.retrieveMultipleRecords not available.";
+            return;
           }
 
-          lines.push("");
-          lines.push(`(Table shows up to ${MAX_TABLE_COLS} columns. Full details below.)`);
-          lines.push("");
-
-          // === RECORD BLOCKS ===
-          lines.push("=== RECORDS (key/value + JSON) ===");
-          lines.push("");
-
-          const formatRecordBlock = (rec, idx) => {
-            const keys = baseKeys(rec).sort((a, b) => a.localeCompare(b));
-            const out = [];
-            out.push(`--- Record ${idx + 1} ---`);
-
-            // Special nice line for customers from alias "cust"
-            const custName = rec["cust.partyid@OData.Community.Display.V1.FormattedValue"];
-            const custType = rec["cust.partyid@Microsoft.Dynamics.CRM.lookuplogicalname"];
-            if (custName) out.push(`Customers => ${custName}${custType ? ` (${custType})` : ""}`);
-
-            for (const k of keys) {
-              const v = rec[k];
-              const fv = rec[`${k}@OData.Community.Display.V1.FormattedValue`];
-
-              if (typeof v === "object" && v != null) {
-                if (Array.isArray(v)) out.push(`${k} => [Array(${v.length})]`);
-                else out.push(`${k} => [Object]`);
-              } else {
-                const shown = (fv != null && fv !== "") ? `${fv} (raw: ${safeString(v)})` : safeString(v);
-                out.push(`${k} => ${shown}`);
-              }
-            }
-
-            out.push("");
-            out.push("JSON:");
-            try { out.push(JSON.stringify(rec, null, 2)); }
-            catch { out.push(String(rec)); }
-
-            return out.join("\n");
-          };
-
-          const MAX_RECORD_BLOCKS = 30;
-          for (let i = 0; i < Math.min(rows.length, MAX_RECORD_BLOCKS); i++) {
-            lines.push(formatRecordBlock(rows[i], i));
-            lines.push("");
-          }
-          if (rows.length > MAX_RECORD_BLOCKS) {
-            lines.push(`... (truncated record blocks to ${MAX_RECORD_BLOCKS} records)`);
+          // Parse entity name from fetchxml (simple regex)
+          const m = fetchXml.match(/<entity\s+name="([^"]+)"/i);
+          const entity = m?.[1];
+          if (!entity) {
+            status.textContent = "❌ Could not detect entity name from <entity name=\"...\">";
+            return;
           }
 
-          resultTa.value = lines.join("\n");
-          status.textContent = `✅ Done (${rows.length} rows).`;
-          resultTa.focus();
-          resultTa.select();
-        } catch (err) {
-          status.textContent = "❌ Failed.";
-          resultTa.value =
-            "ERROR:\n" +
-            (err?.message || err?.toString?.() || "Unknown error") +
-            "\n\nTip: Make sure FetchXML is valid. If you pasted JS concatenation, paste the whole expression.";
-        }
+          status.textContent = "⏳ Running…";
+
+          try {
+            const encoded = encodeURIComponent(fetchXml);
+            const res = await webApi.retrieveMultipleRecords(entity, `?fetchXml=${encoded}`);
+            const rows = res?.entities || [];
+
+            status.textContent = `✅ Entity: ${entity} | Returned: ${rows.length}`;
+            rawTa.value = JSON.stringify(rows, null, 2);
+
+            // render table (up to 5000 returned anyway)
+            renderTable(rows);
+
+            // auto select raw for easy copy if you want:
+            // rawTa.focus(); rawTa.select();
+          } catch (err) {
+            status.textContent = "❌ Failed.";
+            rawTa.value = (err?.message || err?.toString?.() || "Unknown error");
+          }
+        };
+
+        footer.appendChild(btnClose);
+        footer.appendChild(btnCopy);
+        footer.appendChild(btnCsv);
+        footer.appendChild(btnRun);
+
+        box.appendChild(header);
+        box.appendChild(body);
+        box.appendChild(footer);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        fetchTa.focus();
       };
 
-      footer.appendChild(btnClose);
-      footer.appendChild(btnCopy);
-      footer.appendChild(btnRun);
-
-      box.appendChild(header);
-      box.appendChild(body);
-      box.appendChild(footer);
-      overlay.appendChild(box);
-      document.body.appendChild(overlay);
-
-      fetchTa.focus();
+      buildModal();
     }
   });
 });
+
 
 
 
@@ -2136,4 +2031,233 @@ document.getElementById("openAdvancedFind").addEventListener("click", async () =
   } catch (e) {
     alert("Failed to open Advanced Find.\n" + String(e));
   }
+});
+document.getElementById("searchSystemParams").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: () => {
+      document.getElementById("__d365helper_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,.35);
+        z-index: 2147483647; display: flex; align-items: center; justify-content: center; padding: 16px;
+      `;
+
+      const box = document.createElement("div");
+      box.style.cssText = `
+        width: min(1000px, 96vw);
+        background: #fff;
+        border-radius: 14px;
+        box-shadow: 0 18px 50px rgba(0,0,0,.35);
+        overflow: hidden;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        direction: rtl;
+        text-align: right;
+      `;
+
+      const header = document.createElement("div");
+      header.style.cssText = `padding: 12px 14px; font-weight: 900; border-bottom: 1px solid #e5e7eb;`;
+      header.textContent = "Search ey_system_params by string inside ey_value";
+
+      const body = document.createElement("div");
+      body.style.cssText = `padding: 12px 14px; display: grid; gap: 10px;`;
+
+      const input = document.createElement("input");
+      input.placeholder = "Enter text to search inside ey_value (example: DirectDebit)";
+      input.style.cssText = `
+        width: 100%;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 13px;
+        box-sizing: border-box;
+      `;
+
+      const status = document.createElement("div");
+      status.style.cssText = `font-size: 12px; color: #374151;`;
+
+      const resultTa = document.createElement("textarea");
+      resultTa.readOnly = true;
+      resultTa.placeholder = "Results will appear here…";
+      resultTa.style.cssText = `
+        width: 100%;
+        height: 420px;
+        resize: vertical;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre;
+        box-sizing: border-box;
+        font-family: Consolas, Monaco, "Courier New", monospace;
+        direction: ltr;
+        text-align: left;
+      `;
+
+      body.appendChild(input);
+      body.appendChild(status);
+      body.appendChild(resultTa);
+
+      const footer = document.createElement("div");
+      footer.style.cssText = `
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        padding: 12px 14px;
+        border-top: 1px solid #e5e7eb;
+      `;
+
+      const mkBtn = (text) => {
+        const b = document.createElement("button");
+        b.textContent = text;
+        b.style.cssText = `
+          border: 1px solid #cbd5e1;
+          padding: 10px 14px;
+          border-radius: 10px;
+          cursor: pointer;
+          background: #fff;
+          font-weight: 900;
+        `;
+        return b;
+      };
+
+      const btnClose = mkBtn("Close");
+
+      const btnCopy = mkBtn("Copy");
+      btnCopy.style.border = "none";
+      btnCopy.style.background = "#2563eb";
+      btnCopy.style.color = "#fff";
+
+      const btnSearch = mkBtn("Search");
+      btnSearch.style.border = "none";
+      btnSearch.style.background = "#111827";
+      btnSearch.style.color = "#fff";
+
+      const close = () => overlay.remove();
+      btnClose.onclick = close;
+
+      btnCopy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(resultTa.value || "");
+          btnCopy.textContent = "Copied ✅";
+          setTimeout(() => (btnCopy.textContent = "Copy"), 900);
+        } catch {
+          resultTa.focus();
+          resultTa.select();
+          document.execCommand("copy");
+          btnCopy.textContent = "Copied ✅";
+          setTimeout(() => (btnCopy.textContent = "Copy"), 900);
+        }
+      };
+
+      const prettyJsonIfPossible = (valRaw) => {
+        if (valRaw == null) return "";
+        const s = String(valRaw);
+
+        try {
+          const obj = JSON.parse(s);
+          return JSON.stringify(obj, null, 2);
+        } catch {
+          return s;
+        }
+      };
+
+      const runSearch = async () => {
+        status.textContent = "";
+        resultTa.value = "";
+
+        const text = (input.value || "").trim();
+        if (!text) {
+          status.textContent = "❌ Enter a string to search.";
+          return;
+        }
+
+        const Xrm = window.Xrm;
+        const webApi = Xrm?.WebApi || Xrm?.WebApi?.online;
+
+        if (!webApi?.retrieveMultipleRecords) {
+          status.textContent = "❌ Xrm.WebApi.retrieveMultipleRecords not available.";
+          return;
+        }
+
+        status.textContent = "⏳ Searching…";
+
+        try {
+          // contains(field,'text') needs single quotes escaped
+          const safeText = text.replace(/'/g, "''");
+
+          // NOTE: Dataverse string contains is case-insensitive in most environments,
+          // depends on DB collation, but usually works fine.
+          const query =
+            `?$select=ey_name,ey_value` +
+            `&$filter=contains(ey_value,'${safeText}')` +
+            `&$top=5000`;
+
+          const res = await webApi.retrieveMultipleRecords("ey_system_params", query);
+          const rows = res?.entities || [];
+
+          if (!rows.length) {
+            status.textContent = "⚠️ No matches.";
+            resultTa.value = `No ey_system_params found where ey_value contains: "${text}"`;
+            return;
+          }
+
+          const lines = [];
+          lines.push(`Entity: ey_system_params`);
+          lines.push(`Search: ey_value contains "${text}"`);
+          lines.push(`Found: ${rows.length}`);
+          lines.push("");
+
+          rows.forEach((r, i) => {
+            const eyName = r.ey_name ?? "";
+            const eyValueRaw = r.ey_value ?? "";
+
+            lines.push(`${i + 1}) ey_name  = ${eyName}`);
+            lines.push(`   ey_value =`);
+
+            const pretty = prettyJsonIfPossible(eyValueRaw);
+            pretty.split("\n").forEach(line => lines.push("   " + line));
+
+            lines.push("");
+          });
+
+          resultTa.value = lines.join("\n");
+          status.textContent = `✅ Done (${rows.length}).`;
+          resultTa.focus();
+          resultTa.select();
+        } catch (err) {
+          status.textContent = "❌ Failed.";
+          resultTa.value =
+            "ERROR:\n" +
+            (err?.message || err?.toString?.() || "Unknown error") +
+            "\n\nTip: If contains() is blocked in your environment, tell me and I’ll switch to FetchXML search.";
+        }
+      };
+
+      btnSearch.onclick = runSearch;
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") runSearch();
+      });
+
+      footer.appendChild(btnClose);
+      footer.appendChild(btnCopy);
+      footer.appendChild(btnSearch);
+
+      box.appendChild(header);
+      box.appendChild(body);
+      box.appendChild(footer);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      input.focus();
+    }
+  });
 });
