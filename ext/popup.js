@@ -2460,3 +2460,1036 @@ document.getElementById("showDirtyFields").addEventListener("click", async () =>
     }
   });
 });
+document.getElementById("openDefaultView").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !tab.url) return;
+
+  // ask entity
+  const entity = prompt("Enter entity logical name (example: contact, incident, account):");
+  if (!entity) return;
+
+  const cleanEntity = entity.trim().toLowerCase();
+  if (!cleanEntity) return;
+
+  // get base org url + current appid from the current tab
+  const u = new URL(tab.url);
+  const orgUrl = `${u.protocol}//${u.host}`;
+  const appid = u.searchParams.get("appid"); // can be null
+
+  // build default view url
+  // Note: # is optional; without it D365 still opens the default view for that entity
+  const url =
+    `${orgUrl}/main.aspx?` +
+    (appid ? `appid=${encodeURIComponent(appid)}&` : "") +
+    `pagetype=entitylist&etn=${encodeURIComponent(cleanEntity)}`;
+
+  // open in new tab
+  chrome.tabs.create({ url });
+});
+
+document.getElementById("getRolePermissions").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: () => {
+      document.getElementById("__d365helper_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,.35);
+        z-index: 2147483647; display: flex; align-items: center; justify-content: center; padding: 16px;
+      `;
+
+      const box = document.createElement("div");
+      box.style.cssText = `
+        width: min(1200px, 96vw);
+        height: min(780px, 92vh);
+        background: #fff;
+        border-radius: 14px;
+        box-shadow: 0 18px 50px rgba(0,0,0,.35);
+        overflow: hidden;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      `;
+
+      const header = document.createElement("div");
+      header.style.cssText = `
+        padding: 12px 14px;
+        font-weight: 800;
+        border-bottom: 1px solid #e5e7eb;
+      `;
+      header.textContent = "Role Permissions By Entity";
+
+      const body = document.createElement("div");
+      body.style.cssText = `
+        padding: 12px 14px;
+        display: grid;
+        gap: 10px;
+        min-height: 0;
+        flex: 1;
+      `;
+
+      const inputStyle = `
+        width: 100%;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 13px;
+        box-sizing: border-box;
+      `;
+
+      const mkRow = (label, el) => {
+        const wrap = document.createElement("div");
+        wrap.style.cssText = `display:grid; gap:6px;`;
+        const l = document.createElement("div");
+        l.textContent = label;
+        l.style.cssText = `font-size: 12px; font-weight: 700; color: #111827;`;
+        wrap.appendChild(l);
+        wrap.appendChild(el);
+        return wrap;
+      };
+
+      const roleInput = document.createElement("input");
+      roleInput.placeholder = "Role name (e.g. מנהל מערכת)";
+      roleInput.style.cssText = inputStyle;
+
+      const entityInput = document.createElement("input");
+      entityInput.placeholder = "Entity logical name (e.g. contact)";
+      entityInput.style.cssText = inputStyle;
+
+      const status = document.createElement("div");
+      status.style.cssText = `font-size: 12px; color: #374151;`;
+
+      const summary = document.createElement("div");
+      summary.style.cssText = `
+        font-size: 12px;
+        color: #111827;
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 10px;
+      `;
+      summary.textContent = "No data yet.";
+
+      const tableWrap = document.createElement("div");
+      tableWrap.style.cssText = `
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        overflow: auto;
+        min-height: 220px;
+        height: 100%;
+        background: #fff;
+      `;
+
+      const table = document.createElement("table");
+      table.style.cssText = `
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        direction: ltr;
+        text-align: left;
+      `;
+      tableWrap.appendChild(table);
+
+      const rawTa = document.createElement("textarea");
+      rawTa.readOnly = true;
+      rawTa.placeholder = "Raw JSON will appear here…";
+      rawTa.style.cssText = `
+        width: 100%;
+        height: 150px;
+        resize: vertical;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre;
+        box-sizing: border-box;
+        font-family: Consolas, Monaco, "Courier New", monospace;
+        direction: ltr;
+        text-align: left;
+      `;
+
+      body.appendChild(mkRow("Role Name", roleInput));
+      body.appendChild(mkRow("Entity Logical Name", entityInput));
+      body.appendChild(status);
+      body.appendChild(summary);
+      body.appendChild(tableWrap);
+      body.appendChild(rawTa);
+
+      const footer = document.createElement("div");
+      footer.style.cssText = `
+        display: flex; gap: 10px; justify-content: flex-end;
+        padding: 12px 14px; border-top: 1px solid #e5e7eb;
+      `;
+
+      const btn = (text) => {
+        const b = document.createElement("button");
+        b.textContent = text;
+        b.style.cssText = `
+          border: 1px solid #cbd5e1;
+          padding: 10px 14px;
+          border-radius: 10px;
+          cursor: pointer;
+          background: #fff;
+          font-weight: 800;
+        `;
+        return b;
+      };
+
+      const btnClose = btn("Close");
+
+      const btnCopyJson = btn("Copy JSON");
+      btnCopyJson.style.border = "none";
+      btnCopyJson.style.background = "#2563eb";
+      btnCopyJson.style.color = "#fff";
+
+      const btnCopyCsv = btn("Copy CSV");
+      btnCopyCsv.style.border = "none";
+      btnCopyCsv.style.background = "#059669";
+      btnCopyCsv.style.color = "#fff";
+
+      const btnRun = btn("Run");
+      btnRun.style.border = "none";
+      btnRun.style.background = "#111827";
+      btnRun.style.color = "#fff";
+
+      const close = () => overlay.remove();
+      btnClose.onclick = close;
+
+      let lastRows = [];
+
+      const escapeHtml = (s) =>
+        String(s ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+
+      const copyText = async (text, btnRef, originalLabel) => {
+        try {
+          await navigator.clipboard.writeText(text || "");
+        } catch {
+          rawTa.value = text || "";
+          rawTa.focus();
+          rawTa.select();
+          document.execCommand("copy");
+        }
+        btnRef.textContent = "Copied ✅";
+        setTimeout(() => (btnRef.textContent = originalLabel), 900);
+      };
+
+      const toCsv = (rows) => {
+        if (!rows.length) return "";
+        const cols = ["roleName", "entityName", "permission", "depth", "privilegeName"];
+        const esc = (v) => {
+          const s = String(v ?? "");
+          const need = /[",\n]/.test(s);
+          const out = s.replaceAll('"', '""');
+          return need ? `"${out}"` : out;
+        };
+        return [
+          cols.join(","),
+          ...rows.map(r => cols.map(c => esc(r[c])).join(","))
+        ].join("\n");
+      };
+
+      const renderTable = (rows) => {
+        table.innerHTML = "";
+
+        const cols = [
+          { key: "roleName", label: "Role" },
+          { key: "entityName", label: "Entity" },
+          { key: "permission", label: "Permission" },
+          { key: "depth", label: "Depth" },
+          { key: "privilegeName", label: "Privilege" }
+        ];
+
+        const thead = document.createElement("thead");
+        const trh = document.createElement("tr");
+
+        cols.forEach(c => {
+          const th = document.createElement("th");
+          th.innerHTML = escapeHtml(c.label);
+          th.style.cssText = `
+            position: sticky;
+            top: 0;
+            background: #0f172a;
+            color: #fff;
+            padding: 10px 8px;
+            border-bottom: 1px solid rgba(255,255,255,.15);
+            white-space: nowrap;
+            z-index: 1;
+          `;
+          trh.appendChild(th);
+        });
+
+        thead.appendChild(trh);
+        table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+
+        if (!rows.length) {
+          const tr = document.createElement("tr");
+          const td = document.createElement("td");
+          td.colSpan = cols.length;
+          td.textContent = "No permissions found.";
+          td.style.cssText = `
+            padding: 14px 10px;
+            color: #6b7280;
+            text-align: center;
+          `;
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          table.appendChild(tbody);
+          return;
+        }
+
+        rows.forEach((row, idx) => {
+          const tr = document.createElement("tr");
+          tr.style.background = idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+
+          cols.forEach(c => {
+            const td = document.createElement("td");
+            td.innerHTML = escapeHtml(row[c.key] ?? "");
+            td.style.cssText = `
+              padding: 8px 8px;
+              border-bottom: 1px solid #e5e7eb;
+              white-space: nowrap;
+              max-width: 380px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            `;
+            tr.appendChild(td);
+          });
+
+          tbody.appendChild(tr);
+        });
+
+        table.appendChild(tbody);
+      };
+
+      btnCopyJson.onclick = async () => {
+        await copyText(rawTa.value || "", btnCopyJson, "Copy JSON");
+      };
+
+      btnCopyCsv.onclick = async () => {
+        await copyText(toCsv(lastRows), btnCopyCsv, "Copy CSV");
+      };
+
+      const runGet = async () => {
+        status.textContent = "";
+        summary.textContent = "Loading…";
+        rawTa.value = "";
+        renderTable([]);
+        lastRows = [];
+
+        const roleName = (roleInput.value || "").trim();
+        const entityLogicalName = (entityInput.value || "").trim().toLowerCase();
+
+        if (!roleName || !entityLogicalName) {
+          status.textContent = "❌ Role name and entity logical name are required.";
+          summary.textContent = "Missing input.";
+          return;
+        }
+
+        const Xrm = window.Xrm;
+        const webApi = Xrm?.WebApi || Xrm?.WebApi?.online;
+
+        if (!Xrm || !webApi?.retrieveMultipleRecords) {
+          status.textContent = "❌ Xrm.WebApi.retrieveMultipleRecords not available. Open a D365 page.";
+          summary.textContent = "D365 context not found.";
+          return;
+        }
+
+        status.textContent = "⏳ Loading…";
+
+        try {
+          const depthMap = {
+            0: "None",
+            1: "User",
+            2: "Business Unit",
+            4: "Parent:Child Business Unit",
+            8: "Organization"
+          };
+
+          const knownRights = [
+            "Create",
+            "Read",
+            "Write",
+            "Delete",
+            "Append",
+            "AppendTo",
+            "Assign",
+            "Share"
+          ];
+
+          const clean = (v) => (v || "").replace(/[{}]/g, "").toLowerCase();
+
+          const roleResult = await webApi.retrieveMultipleRecords(
+            "role",
+            `?$select=roleid,name&$filter=name eq '${roleName.replace(/'/g, "''")}'`
+          );
+
+          if (!roleResult.entities.length) {
+            status.textContent = "⚠️ Role not found.";
+            summary.textContent = `Role not found: ${roleName}`;
+            rawTa.value = JSON.stringify([], null, 2);
+            renderTable([]);
+            return;
+          }
+
+          const roleRows = [];
+
+          for (const role of roleResult.entities) {
+            const roleId = clean(role.roleid);
+
+            const fetchXml = `
+<fetch distinct="true">
+  <entity name="role">
+    <attribute name="roleid" />
+    <attribute name="name" />
+    <filter>
+      <condition attribute="roleid" operator="eq" value="${roleId}" />
+    </filter>
+    <link-entity name="roleprivileges" from="roleid" to="roleid" alias="rp" intersect="true">
+      <attribute name="privilegedepthmask" />
+      <link-entity name="privilege" from="privilegeid" to="privilegeid" alias="p">
+        <attribute name="name" />
+      </link-entity>
+    </link-entity>
+  </entity>
+</fetch>`;
+
+            const privilegeResult = await webApi.retrieveMultipleRecords(
+              "role",
+              "?fetchXml=" + encodeURIComponent(fetchXml)
+            );
+
+            const matchedPermissions = [];
+
+            for (const row of privilegeResult.entities) {
+              const privilegeName = row["p.name"];
+              const depthValue = row["rp.privilegedepthmask"];
+
+              if (!privilegeName || depthValue == null) continue;
+
+              const matchedRight = knownRights.find(
+                right => privilegeName.toLowerCase() === `prv${right}${entityLogicalName}`.toLowerCase()
+              );
+
+              if (matchedRight) {
+                matchedPermissions.push({
+                  roleName: role.name,
+                  entityName: entityLogicalName,
+                  permission: matchedRight,
+                  privilegeName,
+                  depthValue,
+                  depthLabel: depthMap[depthValue] || `Unknown (${depthValue})`
+                });
+              }
+            }
+
+            roleRows.push({
+              roleId,
+              roleName: role.name,
+              entityName: entityLogicalName,
+              permissions: matchedPermissions.sort((a, b) => a.permission.localeCompare(b.permission))
+            });
+          }
+
+          const flatRows = roleRows.flatMap(r =>
+            r.permissions.map(p => ({
+              roleName: p.roleName,
+              entityName: p.entityName,
+              permission: p.permission,
+              depth: p.depthLabel,
+              privilegeName: p.privilegeName
+            }))
+          );
+
+          lastRows = flatRows;
+          rawTa.value = JSON.stringify(flatRows, null, 2);
+          renderTable(flatRows);
+
+          summary.innerHTML = `
+            <b>Role:</b> ${escapeHtml(roleName)}
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            <b>Entity:</b> ${escapeHtml(entityLogicalName)}
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            <b>Permissions:</b> ${flatRows.length}
+          `;
+
+          status.textContent = flatRows.length
+            ? `✅ Done (${flatRows.length} permissions).`
+            : "⚠️ No permissions found.";
+
+          console.log(`Role: ${roleName}`);
+          console.log(`Entity: ${entityLogicalName}`);
+          console.table(flatRows);
+        } catch (err) {
+          status.textContent = "❌ Failed.";
+          summary.textContent = "Error";
+          rawTa.value =
+            "ERROR:\n" +
+            (err?.message || err?.toString?.() || "Unknown error");
+          renderTable([]);
+        }
+      };
+
+      btnRun.onclick = runGet;
+
+      roleInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") runGet();
+      });
+
+      entityInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") runGet();
+      });
+
+      footer.appendChild(btnClose);
+      footer.appendChild(btnCopyJson);
+      footer.appendChild(btnCopyCsv);
+      footer.appendChild(btnRun);
+
+      box.appendChild(header);
+      box.appendChild(body);
+      box.appendChild(footer);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      roleInput.focus();
+    }
+  });
+});
+document.getElementById("getSystemRolesByPrivilege").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: () => {
+      document.getElementById("__d365helper_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,.35);
+        z-index: 2147483647; display: flex; align-items: center; justify-content: center; padding: 16px;
+      `;
+
+      const box = document.createElement("div");
+      box.style.cssText = `
+        width: min(1200px, 96vw);
+        height: min(780px, 92vh);
+        background: #fff;
+        border-radius: 14px;
+        box-shadow: 0 18px 50px rgba(0,0,0,.35);
+        overflow: hidden;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+      `;
+
+      const header = document.createElement("div");
+      header.style.cssText = `
+        padding: 12px 14px;
+        font-weight: 800;
+        border-bottom: 1px solid #e5e7eb;
+      `;
+      header.textContent = "System Roles By Privilege";
+
+      const body = document.createElement("div");
+      body.style.cssText = `
+        padding: 12px 14px;
+        display: grid;
+        gap: 10px;
+        min-height: 0;
+        flex: 1;
+      `;
+
+      const inputStyle = `
+        width: 100%;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 13px;
+        box-sizing: border-box;
+      `;
+
+      const mkRow = (label, el) => {
+        const wrap = document.createElement("div");
+        wrap.style.cssText = `display:grid; gap:6px;`;
+        const l = document.createElement("div");
+        l.textContent = label;
+        l.style.cssText = `font-size: 12px; font-weight: 700; color: #111827;`;
+        wrap.appendChild(l);
+        wrap.appendChild(el);
+        return wrap;
+      };
+
+      const entityInput = document.createElement("input");
+      entityInput.placeholder = "Entity logical name (e.g. contact)";
+      entityInput.style.cssText = inputStyle;
+
+      const actionSelect = document.createElement("select");
+      actionSelect.style.cssText = inputStyle;
+      [
+        { value: "", text: "Select privilege action..." },
+        { value: "Create", text: "Create" },
+        { value: "Read", text: "Read" },
+        { value: "Write", text: "Write" },
+        { value: "Delete", text: "Delete" },
+        { value: "Append", text: "Append" },
+        { value: "AppendTo", text: "Append To" },
+        { value: "Assign", text: "Assign" },
+        { value: "Share", text: "Share" }
+      ].forEach(o => {
+        const opt = document.createElement("option");
+        opt.value = o.value;
+        opt.textContent = o.text;
+        actionSelect.appendChild(opt);
+      });
+
+      const depthSelect = document.createElement("select");
+      depthSelect.style.cssText = inputStyle;
+      [
+        { value: "", text: "Select depth..." },
+        { value: "1", text: "User / Basic (1)" },
+        { value: "2", text: "Business Unit / Local (2)" },
+        { value: "4", text: "Parent:Child BU / Deep (4)" },
+        { value: "8", text: "Organization / Global (8)" }
+      ].forEach(o => {
+        const opt = document.createElement("option");
+        opt.value = o.value;
+        opt.textContent = o.text;
+        depthSelect.appendChild(opt);
+      });
+
+      const status = document.createElement("div");
+      status.style.cssText = `font-size: 12px; color: #374151;`;
+
+      const summary = document.createElement("div");
+      summary.style.cssText = `
+        font-size: 12px;
+        color: #111827;
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 10px;
+      `;
+      summary.textContent = "No data yet.";
+
+      const tableWrap = document.createElement("div");
+      tableWrap.style.cssText = `
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        overflow: auto;
+        min-height: 220px;
+        height: 100%;
+        background: #fff;
+      `;
+
+      const table = document.createElement("table");
+      table.style.cssText = `
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        direction: ltr;
+        text-align: left;
+      `;
+      tableWrap.appendChild(table);
+
+      const rawTa = document.createElement("textarea");
+      rawTa.readOnly = true;
+      rawTa.placeholder = "Raw JSON will appear here…";
+      rawTa.style.cssText = `
+        width: 100%;
+        height: 150px;
+        resize: vertical;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre;
+        box-sizing: border-box;
+        font-family: Consolas, Monaco, "Courier New", monospace;
+        direction: ltr;
+        text-align: left;
+      `;
+
+      body.appendChild(mkRow("Entity Logical Name", entityInput));
+      body.appendChild(mkRow("Privilege Action", actionSelect));
+      body.appendChild(mkRow("Required Depth", depthSelect));
+      body.appendChild(status);
+      body.appendChild(summary);
+      body.appendChild(tableWrap);
+      body.appendChild(rawTa);
+
+      const footer = document.createElement("div");
+      footer.style.cssText = `
+        display: flex; gap: 10px; justify-content: flex-end;
+        padding: 12px 14px; border-top: 1px solid #e5e7eb;
+      `;
+
+      const btn = (text) => {
+        const b = document.createElement("button");
+        b.textContent = text;
+        b.style.cssText = `
+          border: 1px solid #cbd5e1;
+          padding: 10px 14px;
+          border-radius: 10px;
+          cursor: pointer;
+          background: #fff;
+          font-weight: 800;
+        `;
+        return b;
+      };
+
+      const btnClose = btn("Close");
+
+      const btnCopyJson = btn("Copy JSON");
+      btnCopyJson.style.border = "none";
+      btnCopyJson.style.background = "#2563eb";
+      btnCopyJson.style.color = "#fff";
+
+      const btnCopyCsv = btn("Copy CSV");
+      btnCopyCsv.style.border = "none";
+      btnCopyCsv.style.background = "#059669";
+      btnCopyCsv.style.color = "#fff";
+
+      const btnRun = btn("Run");
+      btnRun.style.border = "none";
+      btnRun.style.background = "#111827";
+      btnRun.style.color = "#fff";
+
+      const close = () => overlay.remove();
+      btnClose.onclick = close;
+
+      let lastRows = [];
+
+      const escapeHtml = (s) =>
+        String(s ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+
+      const copyText = async (text, btnRef, originalLabel) => {
+        try {
+          await navigator.clipboard.writeText(text || "");
+        } catch {
+          rawTa.value = text || "";
+          rawTa.focus();
+          rawTa.select();
+          document.execCommand("copy");
+        }
+        btnRef.textContent = "Copied ✅";
+        setTimeout(() => (btnRef.textContent = originalLabel), 900);
+      };
+
+      const toCsv = (rows) => {
+        if (!rows.length) return "";
+        const cols = ["Distinct Role Name", "Entity", "Action", "Depth"];
+        const esc = (v) => {
+          const s = String(v ?? "");
+          const need = /[",\n]/.test(s);
+          const out = s.replaceAll('"', '""');
+          return need ? `"${out}"` : out;
+        };
+        return [
+          cols.join(","),
+          ...rows.map(r => cols.map(c => esc(r[c])).join(","))
+        ].join("\n");
+      };
+
+      const renderTable = (rows) => {
+        table.innerHTML = "";
+
+        const cols = [
+          { key: "Distinct Role Name", label: "Distinct Role Name" },
+          { key: "Entity", label: "Entity" },
+          { key: "Action", label: "Action" },
+          { key: "Depth", label: "Depth" }
+        ];
+
+        const thead = document.createElement("thead");
+        const trh = document.createElement("tr");
+
+        cols.forEach(c => {
+          const th = document.createElement("th");
+          th.innerHTML = escapeHtml(c.label);
+          th.style.cssText = `
+            position: sticky;
+            top: 0;
+            background: #0f172a;
+            color: #fff;
+            padding: 10px 8px;
+            border-bottom: 1px solid rgba(255,255,255,.15);
+            white-space: nowrap;
+            z-index: 1;
+          `;
+          trh.appendChild(th);
+        });
+
+        thead.appendChild(trh);
+        table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+
+        if (!rows.length) {
+          const tr = document.createElement("tr");
+          const td = document.createElement("td");
+          td.colSpan = cols.length;
+          td.textContent = "No roles found.";
+          td.style.cssText = `
+            padding: 14px 10px;
+            color: #6b7280;
+            text-align: center;
+          `;
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          table.appendChild(tbody);
+          return;
+        }
+
+        rows.forEach((row, idx) => {
+          const tr = document.createElement("tr");
+          tr.style.background = idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+
+          cols.forEach(c => {
+            const td = document.createElement("td");
+            td.innerHTML = escapeHtml(row[c.key] ?? "");
+            td.style.cssText = `
+              padding: 8px 8px;
+              border-bottom: 1px solid #e5e7eb;
+              white-space: nowrap;
+              max-width: 420px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            `;
+            tr.appendChild(td);
+          });
+
+          tbody.appendChild(tr);
+        });
+
+        table.appendChild(tbody);
+      };
+
+      btnCopyJson.onclick = async () => {
+        await copyText(rawTa.value || "", btnCopyJson, "Copy JSON");
+      };
+
+      btnCopyCsv.onclick = async () => {
+        await copyText(toCsv(lastRows), btnCopyCsv, "Copy CSV");
+      };
+
+      const runGet = async () => {
+        status.textContent = "";
+        summary.textContent = "Loading…";
+        rawTa.value = "";
+        renderTable([]);
+        lastRows = [];
+
+        const entityName = (entityInput.value || "").trim().toLowerCase();
+        const privilegeAction = (actionSelect.value || "").trim();
+        const requiredDepth = (depthSelect.value || "").trim();
+
+        if (!entityName || !privilegeAction || !requiredDepth) {
+          status.textContent = "❌ Entity, action and depth are required.";
+          summary.textContent = "Missing input.";
+          return;
+        }
+
+        const Xrm = window.Xrm;
+        const context = Xrm?.Utility?.getGlobalContext?.();
+        const clientUrl = context?.getClientUrl?.();
+
+        if (!Xrm || !clientUrl) {
+          status.textContent = "❌ D365 context not available. Open a D365 page.";
+          summary.textContent = "D365 context not found.";
+          return;
+        }
+
+        status.textContent = "⏳ Loading…";
+
+        try {
+          const normalizeGuid = (id) => (id || "").replace(/[{}]/g, "").toLowerCase();
+          const capitalize = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : "";
+          const getDepthValue = (depth) => {
+            const d = String(depth || "").trim().toLowerCase();
+            const map = { "basic": 1, "user": 1, "local": 2, "bu": 2, "deep": 4, "global": 8, "org": 8 };
+            return isNaN(d) ? (map[d] || 0) : Number(d);
+          };
+
+          const wantedDepthValue = getDepthValue(requiredDepth);
+          const actionName = capitalize(privilegeAction);
+
+          const variations = [
+            `prv${actionName}${entityName}`,
+            `prv${actionName}${entityName.toLowerCase()}`,
+            `prv${actionName}${capitalize(entityName)}`
+          ];
+
+          const privFilter = variations.map(v => `name eq '${v}'`).join(" or ");
+          const privUrl = `${clientUrl}/api/data/v9.2/privileges?$select=privilegeid,name&$filter=${privFilter}`;
+
+          const privRes = await fetch(privUrl, {
+            method: "GET",
+            headers: {
+              "Accept": "application/json",
+              "OData-Version": "4.0",
+              "OData-MaxVersion": "4.0"
+            },
+            credentials: "same-origin"
+          });
+
+          if (!privRes.ok) {
+            throw new Error(`Privilege lookup failed (${privRes.status})`);
+          }
+
+          const privData = await privRes.json();
+
+          if (!privData.value?.length) {
+            status.textContent = "⚠️ Privilege not found.";
+            summary.textContent = `No privilege found for ${actionName} on ${entityName}`;
+            rawTa.value = JSON.stringify([], null, 2);
+            renderTable([]);
+            return;
+          }
+
+          const targetPrivId = normalizeGuid(privData.value[0].privilegeid);
+
+          const roleUrl = `${clientUrl}/api/data/v9.2/roles?$select=name,roleid`;
+          const roleRes = await fetch(roleUrl, {
+            method: "GET",
+            headers: {
+              "Accept": "application/json",
+              "OData-Version": "4.0",
+              "OData-MaxVersion": "4.0"
+            },
+            credentials: "same-origin"
+          });
+
+          if (!roleRes.ok) {
+            throw new Error(`Role lookup failed (${roleRes.status})`);
+          }
+
+          const roleData = await roleRes.json();
+          const allRoles = roleData.value || [];
+
+          const checkRole = async (role) => {
+            try {
+              const url = `${clientUrl}/api/data/v9.2/RetrieveRolePrivilegesRole(RoleId=${role.roleid})`;
+              const res = await fetch(url, {
+                method: "GET",
+                headers: {
+                  "Accept": "application/json",
+                  "OData-Version": "4.0",
+                  "OData-MaxVersion": "4.0"
+                },
+                credentials: "same-origin"
+              });
+
+              if (!res.ok) return null;
+
+              const data = await res.json();
+              const privs = data.RolePrivileges || [];
+
+              const hit = privs.find(p => normalizeGuid(p.PrivilegeId) === targetPrivId);
+              if (hit && getDepthValue(hit.Depth) === wantedDepthValue) {
+                return role.name;
+              }
+            } catch (e) {
+              return null;
+            }
+            return null;
+          };
+
+          const rawResults = await Promise.all(allRoles.map(r => checkRole(r)));
+          const uniqueRoleNames = [...new Set(rawResults.filter(name => name !== null))].sort();
+
+          const depthLabels = {
+            "1": "USER",
+            "2": "BU",
+            "4": "DEEP",
+            "8": "ORG"
+          };
+
+          const tableData = uniqueRoleNames.map(name => ({
+            "Distinct Role Name": name,
+            "Entity": entityName,
+            "Action": privilegeAction,
+            "Depth": depthLabels[String(requiredDepth)] || String(requiredDepth).toUpperCase()
+          }));
+
+          lastRows = tableData;
+          rawTa.value = JSON.stringify(tableData, null, 2);
+          renderTable(tableData);
+
+          summary.innerHTML = `
+            <b>Entity:</b> ${escapeHtml(entityName)}
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            <b>Action:</b> ${escapeHtml(privilegeAction)}
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            <b>Depth:</b> ${escapeHtml(depthLabels[String(requiredDepth)] || String(requiredDepth).toUpperCase())}
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            <b>Roles:</b> ${tableData.length}
+          `;
+
+          status.textContent = tableData.length
+            ? `✅ Done (${tableData.length} roles).`
+            : "⚠️ No roles found with that exact criteria.";
+
+          if (tableData.length) {
+            console.table(tableData);
+          } else {
+            console.warn("No roles found with that exact criteria.");
+          }
+        } catch (err) {
+          status.textContent = "❌ Failed.";
+          summary.textContent = "Error";
+          rawTa.value =
+            "ERROR:\n" +
+            (err?.message || err?.toString?.() || "Unknown error");
+          renderTable([]);
+        }
+      };
+
+      btnRun.onclick = runGet;
+
+      entityInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") runGet();
+      });
+      actionSelect.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") runGet();
+      });
+      depthSelect.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") runGet();
+      });
+
+      footer.appendChild(btnClose);
+      footer.appendChild(btnCopyJson);
+      footer.appendChild(btnCopyCsv);
+      footer.appendChild(btnRun);
+
+      box.appendChild(header);
+      box.appendChild(body);
+      box.appendChild(footer);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      entityInput.focus();
+    }
+  });
+});
