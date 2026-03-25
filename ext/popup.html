@@ -1,33 +1,157 @@
 <!DOCTYPE html>
-<html>
+<html lang="he" dir="rtl">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roi Valdman Extensions</title>
     <link rel="stylesheet" href="popup.css" />
-      <script type="text/javascript" src="ClientGlobalContext.js.aspx"></script>
+    <script type="text/javascript" src="ClientGlobalContext.js.aspx"></script>
   </head>
 
   <body>
-    <h3>Roi Valdman Extentions</h3>
-    <div class="grid">
-        <button id="findLogicalByLabel" class="btn c1">Get Logical Name</button>
-        <button id="findLabelByLogical" class="btn c2">Get Display Name</button>
-        <button id="getSystemParam" class="btn c3">Retrieve System Params</button>
-        <button id="ribbondebug" class="btn c4">Add Ribbon Debug</button>
-        <button id="tabsname" class="btn c5">Get Tabs Names</button>
-        <button id="getFieldValue" class="btn c6">Get Field - current record</button>
-        <button id="retrieveByIdUi" class="btn c7">Retrieve by Guid</button>
-        <button id="retrieveMultiple" class="btn c8">Retrieve Multiple</button>
-        <button id="fetchXmlUi" class="btn c2">FetchXml Tester</button>
-        <button id="openAdvancedFind" class="btn c1">Advanced Search</button>
-        <button id="searchSystemParams" class="btn c3">System Params - By Value</button>
-        <button id="showDirtyFields" class="btn c5">Show Dirty Fields</button>
-        <button id="openDefaultView" class="btn c1">Open Entity View</button>
-        <button id="getRolePermissions" class="btn c4">Role Permissions</button>
-        <button id="getSystemRolesByPrivilege" class="btn c3">Roles By Privilege</button>
-        <button id="assignSecurityRoleUi" class="btn c6">Assign Security Role</button>
-        <button id="shareExt" class="btn c9 span2">Share / Install</button>
-   
+    <div class="app">
+      <header class="app-header">
+        <div class="brand">
+          <div class="brand-mark">RV</div>
+          <div class="brand-text">
+            <h1>Roi Valdman Extensions</h1>
+            <p>D365 / Dataverse Tools</p>
+          </div>
+        </div>
+      </header>
+
+    
+
+      <main class="nav-sections">
+        <section class="nav-group" data-group="metadata">
+          <div class="nav-group-title">Metadata & UI</div>
+
+          <button id="findLogicalByLabel" class="nav-item" data-label="get logical name logical display metadata">
+            <span class="nav-icon">#</span>
+            <span class="nav-text">Get Logical Name</span>
+          </button>
+
+          <button id="findLabelByLogical" class="nav-item" data-label="get display name display logical metadata">
+            <span class="nav-icon">Aa</span>
+            <span class="nav-text">Get Display Name</span>
+          </button>
+
+          <button id="tabsname" class="nav-item" data-label="get tabs names tabs form ui">
+            <span class="nav-icon">☷</span>
+            <span class="nav-text">Get Tabs Names</span>
+          </button>
+
+          <button id="getFieldValue" class="nav-item" data-label="get field current record value">
+            <span class="nav-icon">◫</span>
+            <span class="nav-text">Get Field - current record</span>
+          </button>
+
+          <button id="showDirtyFields" class="nav-item" data-label="show dirty fields modified changed">
+            <span class="nav-icon">✎</span>
+            <span class="nav-text">Show Dirty Fields</span>
+          </button>
+
+          <button id="openDefaultView" class="nav-item" data-label="open entity view default entity view">
+            <span class="nav-icon">☰</span>
+            <span class="nav-text">Open Entity View</span>
+          </button>
+        </section>
+
+        <section class="nav-group" data-group="data">
+          <div class="nav-group-title">Data & Queries</div>
+
+          <button id="retrieveByIdUi" class="nav-item" data-label="retrieve by guid retrieve by id guid">
+            <span class="nav-icon">⌘</span>
+            <span class="nav-text">Retrieve by Guid</span>
+          </button>
+
+          <button id="retrieveMultiple" class="nav-item" data-label="retrieve multiple multiple query">
+            <span class="nav-icon">≣</span>
+            <span class="nav-text">Retrieve Multiple</span>
+          </button>
+
+          <button id="fetchXmlUi" class="nav-item" data-label="fetchxml tester fetchxml">
+            <span class="nav-icon">&lt;/&gt;</span>
+            <span class="nav-text">FetchXml Tester</span>
+          </button>
+
+          <button id="openAdvancedFind" class="nav-item" data-label="advanced search advanced find">
+            <span class="nav-icon">⌕</span>
+            <span class="nav-text">Advanced Search</span>
+          </button>
+
+          <button id="getSystemParam" class="nav-item" data-label="retrieve system params system params">
+            <span class="nav-icon">⚙</span>
+            <span class="nav-text">Retrieve System Params</span>
+          </button>
+
+          <button id="searchSystemParams" class="nav-item" data-label="system params by value search value">
+            <span class="nav-icon">⌗</span>
+            <span class="nav-text">System Params - By Value</span>
+          </button>
+        </section>
+
+        <section class="nav-group" data-group="security">
+          <div class="nav-group-title">Security & Roles</div>
+
+          <button id="getRolePermissions" class="nav-item" data-label="role permissions permissions security">
+            <span class="nav-icon">🛡</span>
+            <span class="nav-text">Role Permissions</span>
+          </button>
+
+          <button id="getSystemRolesByPrivilege" class="nav-item" data-label="roles by privilege privilege roles">
+            <span class="nav-icon">🔑</span>
+            <span class="nav-text">Roles By Privilege</span>
+          </button>
+
+          <button id="assignSecurityRoleUi" class="nav-item nav-item-accent" data-label="assign security role assign role user">
+            <span class="nav-icon">＋</span>
+            <span class="nav-text">Assign Security Role</span>
+          </button>
+
+          <button id="getUserSecurityRolesUi" class="nav-item nav-item-accent" data-label="user security roles user roles security">
+            <span class="nav-icon">👤</span>
+            <span class="nav-text">User Security Roles</span>
+          </button>
+        </section>
+
+        <section class="nav-group" data-group="debug">
+          <div class="nav-group-title">Debug & Utilities</div>
+
+          <button id="ribbondebug" class="nav-item" data-label="add ribbon debug ribbon debug">
+            <span class="nav-icon">✦</span>
+            <span class="nav-text">Add Ribbon Debug</span>
+          </button>
+
+          <button id="shareExt" class="nav-item nav-item-share" data-label="share install extension share install">
+            <span class="nav-icon">⇪</span>
+            <span class="nav-text">Share / Install</span>
+          </button>
+        </section>
+      </main>
     </div>
+
+    <script>
+      const toolSearch = document.getElementById("toolSearch");
+
+      toolSearch?.addEventListener("input", () => {
+        const q = toolSearch.value.trim().toLowerCase();
+        const items = document.querySelectorAll(".nav-item");
+        const groups = document.querySelectorAll(".nav-group");
+
+        items.forEach((item) => {
+          const text = (item.dataset.label || item.textContent || "").toLowerCase();
+          item.style.display = !q || text.includes(q) ? "" : "none";
+        });
+
+        groups.forEach((group) => {
+          const visibleItems = [...group.querySelectorAll(".nav-item")].filter(
+            (item) => item.style.display !== "none"
+          );
+          group.style.display = visibleItems.length ? "" : "none";
+        });
+      });
+    </script>
 
     <script src="popup.js"></script>
   </body>

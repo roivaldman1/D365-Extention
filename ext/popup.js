@@ -185,10 +185,7 @@ const text =
 
       const close = () => overlay.remove();
       btnClose.onclick = close;
-      overlay.addEventListener("click", (e) => {
-        if (e.target === overlay) close();
-      });
-
+    
       body.appendChild(ta);
       footer.appendChild(btnClose);
       footer.appendChild(btnCopy);
@@ -3604,10 +3601,7 @@ document.getElementById("assignSecurityRoleUi").addEventListener("click", async 
       const closeModal = () => overlay.remove();
       document.getElementById("__assignRoleClose").onclick = closeModal;
       document.getElementById("__assignRoleCancel").onclick = closeModal;
-      overlay.addEventListener("click", (e) => {
-        if (e.target === overlay) closeModal();
-      });
-
+   
       const userSearchInput = document.getElementById("__assignRoleUserSearch");
       const userSelect = document.getElementById("__assignRoleUserSelect");
       const roleSearchInput = document.getElementById("__assignRoleRoleSearch");
@@ -3996,3 +3990,396 @@ async function assignRoleById_ToUsername(username, roleId) {
     }
   });
 });
+
+document.getElementById("getUserSecurityRolesUi").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: async () => {
+      document.getElementById("__d365helper_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.35);
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        direction: rtl;
+      `;
+
+      const modal = document.createElement("div");
+      modal.style.cssText = `
+        width: min(1100px, 96vw);
+        max-height: 92vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,.25);
+        padding: 20px;
+        font-family: Segoe UI, Arial, sans-serif;
+      `;
+
+      modal.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
+          <h2 style="margin:0;font-size:22px;">תפקידי אבטחה למשתמש</h2>
+          <button id="__userRolesClose" style="
+            border:none;
+            background:#f3f3f3;
+            border-radius:10px;
+            padding:8px 12px;
+            cursor:pointer;
+            font-size:16px;
+          ">✖</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:380px 1fr;gap:20px;align-items:start;">
+          <div>
+            <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש משתמש</label>
+            <input id="__userRolesUserSearch" type="text" placeholder="חפש לפי שם / יוזר / מייל"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
+
+            <select id="__userRolesUserSelect" size="18"
+              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
+
+            <div style="display:flex;gap:10px;justify-content:flex-start;margin-top:14px;">
+              <button id="__userRolesSubmit" style="
+                border:none;
+                background:#0f6cbd;
+                color:white;
+                border-radius:10px;
+                padding:10px 18px;
+                cursor:pointer;
+                font-size:15px;
+              ">הצג תפקידים</button>
+
+              <button id="__userRolesClear" style="
+                border:none;
+                background:#eaeaea;
+                color:#222;
+                border-radius:10px;
+                padding:10px 18px;
+                cursor:pointer;
+                font-size:15px;
+              ">נקה</button>
+            </div>
+          </div>
+
+          <div>
+            <div id="__userRolesSelectedUser" style="
+              margin-bottom:12px;
+              padding:10px 12px;
+              background:#f7f7f7;
+              border-radius:10px;
+              min-height:20px;
+              font-weight:600;
+            ">לא נבחר משתמש</div>
+
+            <div id="__userRolesResults" style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+            ">
+              <div style="
+                display:grid;
+                grid-template-columns: 1.6fr 1fr;
+                gap:0;
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">
+                <div>תפקיד אבטחה</div>
+                <div>יחידה עסקית</div>
+              </div>
+
+              <div id="__userRolesRows" style="max-height:520px;overflow:auto;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="__userRolesStatus" style="
+          margin-top:14px;
+          padding:10px 12px;
+          background:#f7f7f7;
+          border-radius:10px;
+          min-height:22px;
+          white-space:pre-wrap;
+          font-size:14px;
+        "></div>
+      `;
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      const closeModal = () => overlay.remove();
+      document.getElementById("__userRolesClose").onclick = closeModal;
+   
+   
+      const userSearchInput = document.getElementById("__userRolesUserSearch");
+      const userSelect = document.getElementById("__userRolesUserSelect");
+      const submitBtn = document.getElementById("__userRolesSubmit");
+      const clearBtn = document.getElementById("__userRolesClear");
+      const statusBox = document.getElementById("__userRolesStatus");
+      const selectedUserBox = document.getElementById("__userRolesSelectedUser");
+      const rowsBox = document.getElementById("__userRolesRows");
+
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+      const BASE_URL = `${clientUrl}/api/data/v9.2`;
+
+      let allUsers = [];
+
+      function escapeODataString(str) {
+        return String(str ?? "").replace(/'/g, "''");
+      }
+
+      async function fetchJSON(url, options = {}) {
+        const res = await fetch(url, {
+          ...options,
+          headers: {
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Accept": "application/json",
+            ...(options.headers || {})
+          },
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) {
+          let message = `${res.status}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        return await res.json();
+      }
+
+      async function fetchAllPages(url) {
+        let all = [];
+        let nextUrl = url;
+
+        while (nextUrl) {
+          const data = await fetchJSON(nextUrl);
+          all = all.concat(data.value || []);
+          nextUrl = data["@odata.nextLink"] || null;
+        }
+
+        return all;
+      }
+
+      async function loadUsers() {
+        const users = await fetchAllPages(
+          `${BASE_URL}/systemusers?$select=systemuserid,fullname,domainname,isdisabled,internalemailaddress&$orderby=fullname asc`
+        );
+
+        allUsers = users.map(u => {
+          const domain = u.domainname || "";
+          const email = u.internalemailaddress || "";
+          const username = domain ? domain.replace(/@mac\\.org\\.il$/i, "") : "";
+
+          return {
+            id: u.systemuserid,
+            fullname: u.fullname || "",
+            domainname: domain,
+            internalemailaddress: email,
+            isdisabled: !!u.isdisabled,
+            username: username
+          };
+        });
+      }
+
+      function renderUsers(searchText = "") {
+        const q = searchText.trim().toLowerCase();
+        userSelect.innerHTML = "";
+
+        const filtered = allUsers.filter(u => {
+          if (!q) return true;
+          return (
+            (u.fullname || "").toLowerCase().includes(q) ||
+            (u.domainname || "").toLowerCase().includes(q) ||
+            (u.username || "").toLowerCase().includes(q) ||
+            (u.internalemailaddress || "").toLowerCase().includes(q)
+          );
+        });
+
+        for (const user of filtered) {
+          const option = document.createElement("option");
+          option.value = user.id;
+          option.textContent = `${user.fullname || "(ללא שם)"} | ${user.username || user.domainname || "ללא domain"} | ${user.isdisabled ? "לא פעיל" : "פעיל"}`;
+          option.dataset.userid = user.id;
+          option.dataset.fullname = user.fullname || "";
+          option.dataset.domainname = user.domainname || "";
+          option.dataset.email = user.internalemailaddress || "";
+          option.dataset.isdisabled = String(user.isdisabled);
+          userSelect.appendChild(option);
+        }
+
+        if (filtered.length > 0) userSelect.selectedIndex = 0;
+      }
+
+      async function getUserRoles(userId) {
+        const url =
+          `${BASE_URL}/systemusers(${userId})` +
+          `?$select=fullname,domainname,isdisabled` +
+          `&$expand=systemuserroles_association($select=roleid,name,_businessunitid_value)`;
+
+        const userData = await fetchJSON(url);
+
+        const roles = (userData.systemuserroles_association || []).map(r => ({
+          roleid: r.roleid,
+          name: r.name || "",
+          businessunitid: r._businessunitid_value || ""
+        }));
+
+        return {
+          user: {
+            fullname: userData.fullname || "",
+            domainname: userData.domainname || "",
+            isdisabled: !!userData.isdisabled
+          },
+          roles
+        };
+      }
+
+      async function loadBusinessUnitsMap() {
+        const businessUnits = await fetchAllPages(
+          `${BASE_URL}/businessunits?$select=businessunitid,name&$orderby=name asc`
+        );
+
+        const map = {};
+        for (const bu of businessUnits) {
+          map[bu.businessunitid] = bu.name || "";
+        }
+        return map;
+      }
+
+      function renderRolesRows(roles, businessUnitsMap) {
+        rowsBox.innerHTML = "";
+
+        if (!roles.length) {
+          const empty = document.createElement("div");
+          empty.style.cssText = "padding:14px;";
+          empty.textContent = "לא נמצאו תפקידי אבטחה למשתמש זה.";
+          rowsBox.appendChild(empty);
+          return;
+        }
+
+        const sortedRoles = [...roles].sort((a, b) => {
+          const nameCompare = (a.name || "").localeCompare((b.name || ""), "he");
+          if (nameCompare !== 0) return nameCompare;
+          return (businessUnitsMap[a.businessunitid] || "").localeCompare((businessUnitsMap[b.businessunitid] || ""), "he");
+        });
+
+        for (const role of sortedRoles) {
+          const row = document.createElement("div");
+          row.style.cssText = `
+            display:grid;
+            grid-template-columns: 1.6fr 1fr;
+            gap:0;
+            padding:12px;
+            border-bottom:1px solid #eee;
+            align-items:center;
+          `;
+
+          const roleNameCell = document.createElement("div");
+          roleNameCell.textContent = role.name || "";
+
+          const buCell = document.createElement("div");
+          buCell.textContent = businessUnitsMap[role.businessunitid] || role.businessunitid || "";
+
+          row.appendChild(roleNameCell);
+          row.appendChild(buCell);
+          rowsBox.appendChild(row);
+        }
+      }
+
+      try {
+        statusBox.textContent = "טוען את כל המשתמשים...";
+        await loadUsers();
+        renderUsers();
+        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים`;
+      } catch (err) {
+        statusBox.textContent = `❌ שגיאה בטעינה: ${err.message}`;
+        return;
+      }
+
+      userSearchInput.addEventListener("input", () => renderUsers(userSearchInput.value));
+
+      userSearchInput.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown") {
+          userSelect.focus();
+          if (userSelect.options.length && userSelect.selectedIndex < 0) {
+            userSelect.selectedIndex = 0;
+          }
+        }
+      });
+
+      clearBtn.addEventListener("click", () => {
+        userSearchInput.value = "";
+        renderUsers("");
+        selectedUserBox.textContent = "לא נבחר משתמש";
+        rowsBox.innerHTML = "";
+        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים`;
+      });
+
+      submitBtn.addEventListener("click", async () => {
+        const selectedUser = userSelect.options[userSelect.selectedIndex];
+
+        if (!selectedUser) {
+          statusBox.textContent = "צריך לבחור משתמש מהרשימה.";
+          return;
+        }
+
+        const userId = selectedUser.dataset.userid;
+        const fullName = selectedUser.dataset.fullname || "";
+        const domainName = selectedUser.dataset.domainname || "";
+        const isDisabled = selectedUser.dataset.isdisabled === "true";
+
+        submitBtn.disabled = true;
+        statusBox.textContent = "טוען תפקידי אבטחה...";
+        rowsBox.innerHTML = "";
+        selectedUserBox.textContent = `משתמש נבחר: ${fullName} | ${domainName || "ללא domain"} | ${isDisabled ? "לא פעיל" : "פעיל"}`;
+
+        try {
+          const [result, businessUnitsMap] = await Promise.all([
+            getUserRoles(userId),
+            loadBusinessUnitsMap()
+          ]);
+
+          renderRolesRows(result.roles, businessUnitsMap);
+
+          statusBox.textContent =
+            `✅ נמצאו ${result.roles.length} תפקידי אבטחה עבור ${result.user.fullname}` +
+            (result.user.domainname ? ` (${result.user.domainname})` : "");
+        } catch (err) {
+          statusBox.textContent = `❌ שגיאה: ${err.message}`;
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    }
+  });
+});
+
+
+
+
+
+
+
+
+
+
+
+
