@@ -3493,3 +3493,506 @@ document.getElementById("getSystemRolesByPrivilege").addEventListener("click", a
     }
   });
 });
+document.getElementById("assignSecurityRoleUi").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: async () => {
+      document.getElementById("__d365helper_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.35);
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        direction: rtl;
+      `;
+
+      const modal = document.createElement("div");
+      modal.style.cssText = `
+        width: min(980px, 96vw);
+        max-height: 92vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,.25);
+        padding: 20px;
+        font-family: Segoe UI, Arial, sans-serif;
+      `;
+
+      modal.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
+          <h2 style="margin:0;font-size:22px;">הקצאת תפקיד אבטחה למשתמש</h2>
+          <button id="__assignRoleClose" style="
+            border:none;
+            background:#f3f3f3;
+            border-radius:10px;
+            padding:8px 12px;
+            cursor:pointer;
+            font-size:16px;
+          ">✖</button>
+        </div>
+        <div style="margin-bottom:14px;padding:10px 12px;background:#f7f7f7;border-radius:10px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
+            <input id="__assignRoleUseCurrentUser" type="checkbox" />
+            בצע עליי (המשתמש המחובר)
+          </label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+          <div>
+            <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש משתמש</label>
+            <input id="__assignRoleUserSearch" type="text" placeholder="חפש לפי שם / יוזר / מייל"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
+            <select id="__assignRoleUserSelect" size="16"
+              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
+          </div>
+
+          <div>
+            <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש תפקיד אבטחה</label>
+            <input id="__assignRoleRoleSearch" type="text" placeholder="חפש תפקיד"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
+            <select id="__assignRoleRoleSelect" size="16"
+              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:flex-start;margin-top:18px;">
+          <button id="__assignRoleSubmit" style="
+            border:none;
+            background:#0f6cbd;
+            color:white;
+            border-radius:10px;
+            padding:10px 18px;
+            cursor:pointer;
+            font-size:15px;
+          ">הקצה תפקיד</button>
+
+          <button id="__assignRoleCancel" style="
+            border:none;
+            background:#eaeaea;
+            color:#222;
+            border-radius:10px;
+            padding:10px 18px;
+            cursor:pointer;
+            font-size:15px;
+          ">סגור</button>
+        </div>
+
+        <div id="__assignRoleStatus" style="
+          margin-top:14px;
+          padding:10px 12px;
+          background:#f7f7f7;
+          border-radius:10px;
+          min-height:22px;
+          white-space:pre-wrap;
+          font-size:14px;
+        "></div>
+      `;
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      const closeModal = () => overlay.remove();
+      document.getElementById("__assignRoleClose").onclick = closeModal;
+      document.getElementById("__assignRoleCancel").onclick = closeModal;
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) closeModal();
+      });
+
+      const userSearchInput = document.getElementById("__assignRoleUserSearch");
+      const userSelect = document.getElementById("__assignRoleUserSelect");
+      const roleSearchInput = document.getElementById("__assignRoleRoleSearch");
+      const roleSelect = document.getElementById("__assignRoleRoleSelect");
+      const submitBtn = document.getElementById("__assignRoleSubmit");
+      const statusBox = document.getElementById("__assignRoleStatus");
+      const useCurrentUserCheckbox = document.getElementById("__assignRoleUseCurrentUser");
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+      const BASE_URL = `${clientUrl}/api/data/v9.2`;
+
+      let allUsers = [];
+      let allRoles = [];
+  async function assignRoleToCurrentUser(roleId) {
+        const currentUserId = Xrm.Utility.getGlobalContext().userSettings.userId.replace(/[{}]/g, "");
+
+        const user = await fetchJSON(
+          `${BASE_URL}/systemusers(${currentUserId})?$select=systemuserid,fullname,domainname,isdisabled`
+        );
+
+        const roleData = await fetchJSON(
+          `${BASE_URL}/roles(${roleId})?$select=roleid,name`
+        );
+      if (!roleData?.roleid) throw new Error(`תפקיד לא נמצא: ${roleId}`);
+
+        const res = await fetch(
+          `${BASE_URL}/systemusers(${user.systemuserid})/systemuserroles_association/$ref`,
+          {
+            method: "POST",
+            headers: {
+              "OData-MaxVersion": "4.0",
+              "OData-Version": "4.0",
+              "Accept": "application/json",
+              "Content-Type": "application/json"
+            },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              "@odata.id": `${BASE_URL}/roles(${roleData.roleid})`
+                })
+              }
+            );
+
+        if (!res.ok) {
+          let message = `${res.status}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        return { user, role: roleData };
+      }
+      function escapeODataString(str) {
+        return String(str ?? "").replace(/'/g, "''");
+      }
+      function toggleUserSelectionState() {
+        const disabled = useCurrentUserCheckbox.checked;
+
+        userSearchInput.disabled = disabled;
+        userSelect.disabled = disabled;
+
+        userSearchInput.style.opacity = disabled ? "0.6" : "1";
+        userSelect.style.opacity = disabled ? "0.6" : "1";
+      }
+      useCurrentUserCheckbox.addEventListener("change", toggleUserSelectionState);
+      toggleUserSelectionState();
+      async function fetchJSON(url, options = {}) {
+        const res = await fetch(url, {
+          ...options,
+          headers: {
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Accept": "application/json",
+            ...(options.headers || {})
+          },
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) {
+          let message = `${res.status}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        return await res.json();
+      }
+
+      async function fetchAllPages(url) {
+        let all = [];
+        let nextUrl = url;
+
+        while (nextUrl) {
+          const data = await fetchJSON(nextUrl);
+          all = all.concat(data.value || []);
+          nextUrl = data["@odata.nextLink"] || null;
+        }
+
+        return all;
+      }
+
+      async function assignRoleByName_ByUsername(username, roleName) {
+        username = username + "@mac.org.il";
+
+        const users = await fetchJSON(
+          `${BASE_URL}/systemusers?$filter=domainname eq '${escapeODataString(username)}'&$select=systemuserid,fullname,domainname,isdisabled`
+        );
+        if (!users.value.length) throw new Error(`משתמש לא נמצא: ${username}`);
+        const user = users.value[0];
+
+        const roles = await fetchJSON(
+          `${BASE_URL}/roles?$filter=name eq '${escapeODataString(roleName)}'&$select=roleid,name`
+        );
+        if (!roles.value.length) throw new Error(`תפקיד לא נמצא: ${roleName}`);
+        const role = roles.value[0];
+
+        const res = await fetch(
+          `${BASE_URL}/systemusers(${user.systemuserid})/systemuserroles_association/$ref`,
+          {
+            method: "POST",
+            headers: {
+              "OData-MaxVersion": "4.0",
+              "OData-Version": "4.0",
+              "Accept": "application/json",
+              "Content-Type": "application/json"
+            },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              "@odata.id": `${BASE_URL}/roles(${role.roleid})`
+            })
+          }
+        );
+
+        if (!res.ok) {
+          let message = `${res.status}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        return { user, role };
+      }
+
+      async function loadUsers() {
+        const users = await fetchAllPages(
+          `${BASE_URL}/systemusers?$select=systemuserid,fullname,domainname,isdisabled,internalemailaddress&$orderby=fullname asc`
+        );
+
+        allUsers = users.map(u => {
+          const domain = u.domainname || "";
+          const email = u.internalemailaddress || "";
+          const username = domain ? domain.replace(/@mac\.org\.il$/i, "") : "";
+
+          return {
+            id: u.systemuserid,
+            fullname: u.fullname || "",
+            domainname: domain,
+            internalemailaddress: email,
+            isdisabled: !!u.isdisabled,
+            username: username
+          };
+        });
+      }
+
+      async function loadRoles() {
+        const businessUnits = await fetchAllPages(
+          `${BASE_URL}/businessunits?$select=businessunitid,name,_parentbusinessunitid_value`
+        );
+
+        const rootBusinessUnit = businessUnits.find(bu => !bu._parentbusinessunitid_value);
+        if (!rootBusinessUnit) {
+          throw new Error("לא נמצאה יחידה עסקית ראשית");
+        }
+
+        const rootBusinessUnitId = rootBusinessUnit.businessunitid;
+
+        const roles = await fetchAllPages(
+          `${BASE_URL}/roles?$select=roleid,name,_businessunitid_value&$orderby=name asc`
+        );
+
+        allRoles = roles
+          .filter(r => r.name && r._businessunitid_value === rootBusinessUnitId)
+          .sort((a, b) => (a.name || "").localeCompare(b.name || "", "he"))
+          .map(r => ({
+            id: r.roleid,
+            name: r.name || "",
+            businessunitid: r._businessunitid_value
+          }));
+      }
+async function assignRoleById_ToUsername(username, roleId) {
+  username = username + "@mac.org.il";
+
+  const users = await fetchJSON(
+    `${BASE_URL}/systemusers?$filter=domainname eq '${escapeODataString(username)}'&$select=systemuserid,fullname,domainname,isdisabled`
+  );
+  if (!users.value.length) throw new Error(`משתמש לא נמצא: ${username}`);
+  const user = users.value[0];
+
+  const roleData = await fetchJSON(
+    `${BASE_URL}/roles(${roleId})?$select=roleid,name`
+  );
+  if (!roleData?.roleid) throw new Error(`תפקיד לא נמצא: ${roleId}`);
+
+  const res = await fetch(
+    `${BASE_URL}/systemusers(${user.systemuserid})/systemuserroles_association/$ref`,
+    {
+      method: "POST",
+      headers: {
+        "OData-MaxVersion": "4.0",
+        "OData-Version": "4.0",
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+      },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        "@odata.id": `${BASE_URL}/roles(${roleData.roleid})`
+      })
+    }
+  );
+
+  if (!res.ok) {
+    let message = `${res.status}`;
+    try {
+      const err = await res.json();
+      message = err?.error?.message || message;
+    } catch (_) {}
+    throw new Error(message);
+  }
+
+  return { user, role: roleData };
+}
+      function renderUsers(searchText = "") {
+        const q = searchText.trim().toLowerCase();
+        userSelect.innerHTML = "";
+
+        const filtered = allUsers.filter(u => {
+          if (!q) return true;
+
+          return (
+            (u.fullname || "").toLowerCase().includes(q) ||
+            (u.domainname || "").toLowerCase().includes(q) ||
+            (u.username || "").toLowerCase().includes(q) ||
+            (u.internalemailaddress || "").toLowerCase().includes(q)
+          );
+        });
+
+        for (const user of filtered) {
+          const option = document.createElement("option");
+          option.value = user.username || user.domainname || user.fullname;
+
+          const statusText = user.isdisabled ? "לא פעיל" : "פעיל";
+          const userLabel = user.username || user.domainname || "ללא domainname";
+
+          option.textContent = `${user.fullname || "(ללא שם)"} | ${userLabel} | ${statusText}`;
+          option.dataset.domainname = user.domainname || "";
+          option.dataset.userid = user.id;
+          option.dataset.isdisabled = String(user.isdisabled);
+          option.dataset.email = user.internalemailaddress || "";
+          userSelect.appendChild(option);
+        }
+
+        if (filtered.length > 0) userSelect.selectedIndex = 0;
+      }
+
+      function renderRoles(searchText = "") {
+        const q = searchText.trim().toLowerCase();
+        roleSelect.innerHTML = "";
+
+        const filtered = allRoles.filter(r => {
+          if (!q) return true;
+          return (r.name || "").toLowerCase().includes(q);
+        });
+
+        for (const role of filtered) {
+          const option = document.createElement("option");
+          option.value = role.name;
+          option.textContent = role.name;
+          option.dataset.roleid = role.id;
+          roleSelect.appendChild(option);
+        }
+
+        if (filtered.length > 0) roleSelect.selectedIndex = 0;
+      }
+
+      try {
+        statusBox.textContent = "טוען את כל המשתמשים (פעילים ולא פעילים) ואת כל התפקידים...";
+        await Promise.all([loadUsers(), loadRoles()]);
+        renderUsers();
+        renderRoles();
+
+        const activeCount = allUsers.filter(u => !u.isdisabled).length;
+        const disabledCount = allUsers.filter(u => u.isdisabled).length;
+
+        statusBox.textContent =
+          `✅ נטענו ${allUsers.length} משתמשים (${activeCount} פעילים, ${disabledCount} לא פעילים)\n` +
+          `✅ נטענו ${allRoles.length} תפקידים`;
+      } catch (err) {
+        statusBox.textContent = `❌ שגיאה בטעינה: ${err.message}`;
+        return;
+      }
+
+      userSearchInput.addEventListener("input", () => renderUsers(userSearchInput.value));
+      roleSearchInput.addEventListener("input", () => renderRoles(roleSearchInput.value));
+
+      userSearchInput.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown") {
+          userSelect.focus();
+          if (userSelect.options.length && userSelect.selectedIndex < 0) {
+            userSelect.selectedIndex = 0;
+          }
+        }
+      });
+
+      roleSearchInput.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown") {
+          roleSelect.focus();
+          if (roleSelect.options.length && roleSelect.selectedIndex < 0) {
+            roleSelect.selectedIndex = 0;
+          }
+        }
+      });
+
+      submitBtn.addEventListener("click", async () => {
+  const selectedRole = roleSelect.options[roleSelect.selectedIndex];
+
+  if (!selectedRole) {
+    statusBox.textContent = "צריך לבחור תפקיד מהרשימה.";
+    return;
+  }
+
+  const useCurrentUser = useCurrentUserCheckbox.checked;
+  const roleId = selectedRole.dataset.roleid;
+  const roleName = selectedRole.value;
+
+  let selectedUser = null;
+  let username = null;
+
+  if (!useCurrentUser) {
+    selectedUser = userSelect.options[userSelect.selectedIndex];
+
+    if (!selectedUser) {
+      statusBox.textContent = "צריך לבחור משתמש מהרשימה או לסמן 'בצע עליי'.";
+      return;
+    }
+
+    username = selectedUser.value;
+
+    if (!username) {
+      statusBox.textContent = "למשתמש שנבחר אין domainname / username תקין.";
+      return;
+    }
+  }
+
+  submitBtn.disabled = true;
+
+  if (useCurrentUser) {
+    statusBox.textContent = `מקצה את התפקיד "${roleName}" למשתמש המחובר...`;
+  } else {
+    statusBox.textContent = `מקצה את התפקיד "${roleName}" למשתמש "${username}"...`;
+  }
+
+  try {
+    let result;
+
+    if (useCurrentUser) {
+      result = await assignRoleToCurrentUser(roleId);
+    } else {
+      result = await assignRoleById_ToUsername(username, roleId);
+    }
+
+    statusBox.textContent =
+      `✅ התפקיד הוקצה בהצלחה\n` +
+      `משתמש: ${result.user.fullname} (${result.user.domainname || "ללא domainname"})\n` +
+      `סטטוס: ${result.user.isdisabled ? "לא פעיל" : "פעיל"}\n` +
+      `תפקיד: ${result.role.name}`;
+  } catch (err) {
+    statusBox.textContent = `❌ שגיאה: ${err.message}`;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+    }
+  });
+});
