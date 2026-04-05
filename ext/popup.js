@@ -4371,15 +4371,1730 @@ document.getElementById("getUserSecurityRolesUi").addEventListener("click", asyn
     }
   });
 });
+document.getElementById("removeSecurityRoleUi").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: async () => {
+      document.getElementById("__d365helper_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.35);
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        direction: rtl;
+      `;
+
+      const modal = document.createElement("div");
+      modal.style.cssText = `
+        width: min(1200px, 96vw);
+        max-height: 92vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,.25);
+        padding: 20px;
+        font-family: Segoe UI, Arial, sans-serif;
+      `;
+
+      modal.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
+          <h2 style="margin:0;font-size:22px;">הסרת תפקיד אבטחה ממשתמש</h2>
+          <button id="__removeRoleClose" style="
+            border:none;
+            background:#f3f3f3;
+            border-radius:10px;
+            padding:8px 12px;
+            cursor:pointer;
+            font-size:16px;
+          ">✖</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:380px 1fr;gap:20px;align-items:start;">
+          <div>
+            <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש משתמש</label>
+            <input id="__removeRoleUserSearch" type="text" placeholder="חפש לפי שם / יוזר / מייל"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
+
+            <select id="__removeRoleUserSelect" size="18"
+              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
+
+            <div style="display:flex;gap:10px;justify-content:flex-start;margin-top:14px;">
+              <button id="__removeRoleSubmit" style="
+                border:none;
+                background:#0f6cbd;
+                color:white;
+                border-radius:10px;
+                padding:10px 18px;
+                cursor:pointer;
+                font-size:15px;
+              ">הצג תפקידים</button>
+
+              <button id="__removeRoleClear" style="
+                border:none;
+                background:#eaeaea;
+                color:#222;
+                border-radius:10px;
+                padding:10px 18px;
+                cursor:pointer;
+                font-size:15px;
+              ">נקה</button>
+            </div>
+          </div>
+
+          <div>
+            <div id="__removeRoleSelectedUser" style="
+              margin-bottom:12px;
+              padding:10px 12px;
+              background:#f7f7f7;
+              border-radius:10px;
+              min-height:20px;
+              font-weight:600;
+            ">לא נבחר משתמש</div>
+
+            <div id="__removeRoleResults" style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+            ">
+              <div style="
+                display:grid;
+                grid-template-columns: 1.5fr 1fr 140px;
+                gap:0;
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">
+                <div>תפקיד אבטחה</div>
+                <div>יחידה עסקית</div>
+                <div>פעולה</div>
+              </div>
+
+              <div id="__removeRoleRows" style="max-height:520px;overflow:auto;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="__removeRoleStatus" style="
+          margin-top:14px;
+          padding:10px 12px;
+          background:#f7f7f7;
+          border-radius:10px;
+          min-height:22px;
+          white-space:pre-wrap;
+          font-size:14px;
+        "></div>
+      `;
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      const closeModal = () => overlay.remove();
+      document.getElementById("__removeRoleClose").onclick = closeModal;
+
+      const userSearchInput = document.getElementById("__removeRoleUserSearch");
+      const userSelect = document.getElementById("__removeRoleUserSelect");
+      const submitBtn = document.getElementById("__removeRoleSubmit");
+      const clearBtn = document.getElementById("__removeRoleClear");
+      const statusBox = document.getElementById("__removeRoleStatus");
+      const selectedUserBox = document.getElementById("__removeRoleSelectedUser");
+      const rowsBox = document.getElementById("__removeRoleRows");
+
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+      const BASE_URL = `${clientUrl}/api/data/v9.2`;
+
+      let allUsers = [];
+      let businessUnitsMap = {};
+      let currentSelectedUserId = null;
+
+      async function fetchJSON(url, options = {}) {
+        const res = await fetch(url, {
+          ...options,
+          headers: {
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Accept": "application/json",
+            ...(options.headers || {})
+          },
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) {
+          let message = `${res.status}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        if (res.status === 204) return null;
+        return await res.json();
+      }
+
+      async function fetchAllPages(url) {
+        let all = [];
+        let nextUrl = url;
+
+        while (nextUrl) {
+          const data = await fetchJSON(nextUrl);
+          all = all.concat(data?.value || []);
+          nextUrl = data?.["@odata.nextLink"] || null;
+        }
+
+        return all;
+      }
+
+      async function loadUsers() {
+        const users = await fetchAllPages(
+          `${BASE_URL}/systemusers?$select=systemuserid,fullname,domainname,isdisabled,internalemailaddress&$orderby=fullname asc`
+        );
+
+        allUsers = users.map(u => {
+          const domain = u.domainname || "";
+          const email = u.internalemailaddress || "";
+          const username = domain ? domain.replace(/@mac\\.org\\.il$/i, "") : "";
+
+          return {
+            id: u.systemuserid,
+            fullname: u.fullname || "",
+            domainname: domain,
+            internalemailaddress: email,
+            isdisabled: !!u.isdisabled,
+            username
+          };
+        });
+      }
+
+      async function loadBusinessUnitsMap() {
+        const businessUnits = await fetchAllPages(
+          `${BASE_URL}/businessunits?$select=businessunitid,name&$orderby=name asc`
+        );
+
+        const map = {};
+        for (const bu of businessUnits) {
+          map[bu.businessunitid] = bu.name || "";
+        }
+        businessUnitsMap = map;
+      }
+
+      function renderUsers(searchText = "") {
+        const q = searchText.trim().toLowerCase();
+        userSelect.innerHTML = "";
+
+        const filtered = allUsers.filter(u => {
+          if (!q) return true;
+          return (
+            (u.fullname || "").toLowerCase().includes(q) ||
+            (u.domainname || "").toLowerCase().includes(q) ||
+            (u.username || "").toLowerCase().includes(q) ||
+            (u.internalemailaddress || "").toLowerCase().includes(q)
+          );
+        });
+
+        for (const user of filtered) {
+          const option = document.createElement("option");
+          option.value = user.id;
+          option.textContent = `${user.fullname || "(ללא שם)"} | ${user.username || user.domainname || "ללא domain"} | ${user.isdisabled ? "לא פעיל" : "פעיל"}`;
+          option.dataset.userid = user.id;
+          option.dataset.fullname = user.fullname || "";
+          option.dataset.domainname = user.domainname || "";
+          option.dataset.email = user.internalemailaddress || "";
+          option.dataset.isdisabled = String(user.isdisabled);
+          userSelect.appendChild(option);
+        }
+
+        if (filtered.length > 0) userSelect.selectedIndex = 0;
+      }
+
+      async function getUserRoles(userId) {
+        const url =
+          `${BASE_URL}/systemusers(${userId})` +
+          `?$select=fullname,domainname,isdisabled` +
+          `&$expand=systemuserroles_association($select=roleid,name,_businessunitid_value)`;
+
+        const userData = await fetchJSON(url);
+
+        const roles = (userData.systemuserroles_association || []).map(r => ({
+          roleid: r.roleid,
+          name: r.name || "",
+          businessunitid: r._businessunitid_value || ""
+        }));
+
+        return {
+          user: {
+            fullname: userData.fullname || "",
+            domainname: userData.domainname || "",
+            isdisabled: !!userData.isdisabled
+          },
+          roles
+        };
+      }
+
+      async function removeUserRole(userId, roleId) {
+        const url = `${BASE_URL}/systemusers(${userId})/systemuserroles_association(${roleId})/$ref`;
+
+        await fetchJSON(url, {
+          method: "DELETE",
+          headers: {
+            "If-Match": "*"
+          }
+        });
+      }
+
+      async function refreshRoles(userId, userLabel) {
+        rowsBox.innerHTML = "";
+        statusBox.textContent = "טוען תפקידי אבטחה...";
+
+        const result = await getUserRoles(userId);
+        renderRolesRows(result.roles, businessUnitsMap, userId);
+
+        statusBox.textContent =
+          `✅ נמצאו ${result.roles.length} תפקידי אבטחה עבור ${result.user.fullname}` +
+          (result.user.domainname ? ` (${result.user.domainname})` : "");
+
+        if (userLabel) {
+          selectedUserBox.textContent = userLabel;
+        }
+      }
+
+      function renderRolesRows(roles, businessUnitsMap, userId) {
+        rowsBox.innerHTML = "";
+
+        if (!roles.length) {
+          const empty = document.createElement("div");
+          empty.style.cssText = "padding:14px;";
+          empty.textContent = "לא נמצאו תפקידי אבטחה למשתמש זה.";
+          rowsBox.appendChild(empty);
+          return;
+        }
+
+        const sortedRoles = [...roles].sort((a, b) => {
+          const nameCompare = (a.name || "").localeCompare((b.name || ""), "he");
+          if (nameCompare !== 0) return nameCompare;
+          return (businessUnitsMap[a.businessunitid] || "").localeCompare((businessUnitsMap[b.businessunitid] || ""), "he");
+        });
+
+        for (const role of sortedRoles) {
+          const row = document.createElement("div");
+          row.style.cssText = `
+            display:grid;
+            grid-template-columns: 1.5fr 1fr 140px;
+            gap:0;
+            padding:12px;
+            border-bottom:1px solid #eee;
+            align-items:center;
+          `;
+
+          const roleNameCell = document.createElement("div");
+          roleNameCell.textContent = role.name || "";
+
+          const buCell = document.createElement("div");
+          buCell.textContent = businessUnitsMap[role.businessunitid] || role.businessunitid || "";
+
+          const actionCell = document.createElement("div");
+          const removeBtn = document.createElement("button");
+          removeBtn.textContent = "הסר";
+          removeBtn.style.cssText = `
+            border:none;
+            background:#d13438;
+            color:white;
+            border-radius:8px;
+            padding:8px 12px;
+            cursor:pointer;
+            font-size:14px;
+          `;
+
+          removeBtn.addEventListener("click", async () => {
+            const confirmed = confirm(`להסיר את התפקיד "${role.name}" מהמשתמש?`);
+            if (!confirmed) return;
+
+            removeBtn.disabled = true;
+            statusBox.textContent = `מסיר את התפקיד "${role.name}"...`;
+
+            try {
+              await removeUserRole(userId, role.roleid);
+              statusBox.textContent = `✅ התפקיד "${role.name}" הוסר בהצלחה`;
+              await refreshRoles(currentSelectedUserId, selectedUserBox.textContent);
+            } catch (err) {
+              statusBox.textContent = `❌ שגיאה בהסרה: ${err.message}`;
+            } finally {
+              removeBtn.disabled = false;
+            }
+          });
+
+          actionCell.appendChild(removeBtn);
+
+          row.appendChild(roleNameCell);
+          row.appendChild(buCell);
+          row.appendChild(actionCell);
+
+          rowsBox.appendChild(row);
+        }
+      }
+
+      try {
+        statusBox.textContent = "טוען נתונים...";
+        await Promise.all([loadUsers(), loadBusinessUnitsMap()]);
+        renderUsers();
+        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים`;
+      } catch (err) {
+        statusBox.textContent = `❌ שגיאה בטעינה: ${err.message}`;
+        return;
+      }
+
+      userSearchInput.addEventListener("input", () => renderUsers(userSearchInput.value));
+
+      clearBtn.addEventListener("click", () => {
+        userSearchInput.value = "";
+        renderUsers("");
+        currentSelectedUserId = null;
+        selectedUserBox.textContent = "לא נבחר משתמש";
+        rowsBox.innerHTML = "";
+        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים`;
+      });
+
+      submitBtn.addEventListener("click", async () => {
+        const selectedUser = userSelect.options[userSelect.selectedIndex];
+
+        if (!selectedUser) {
+          statusBox.textContent = "צריך לבחור משתמש מהרשימה.";
+          return;
+        }
+
+        const userId = selectedUser.dataset.userid;
+        const fullName = selectedUser.dataset.fullname || "";
+        const domainName = selectedUser.dataset.domainname || "";
+        const isDisabled = selectedUser.dataset.isdisabled === "true";
+
+        currentSelectedUserId = userId;
+        const userLabel = `משתמש נבחר: ${fullName} | ${domainName || "ללא domain"} | ${isDisabled ? "לא פעיל" : "פעיל"}`;
+
+        submitBtn.disabled = true;
+        selectedUserBox.textContent = userLabel;
+        rowsBox.innerHTML = "";
+        statusBox.textContent = "טוען תפקידי אבטחה...";
+
+        try {
+          await refreshRoles(userId, userLabel);
+        } catch (err) {
+          statusBox.textContent = `❌ שגיאה: ${err.message}`;
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    }
+  });
+});
+
+
+document.getElementById("quickUpdateFieldUi").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: async () => {
+      document.getElementById("__d365helper_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.35);
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        direction: ltr;
+      `;
+
+      const modal = document.createElement("div");
+      modal.style.cssText = `
+        width: min(1200px, 96vw);
+        max-height: 92vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,.25);
+        padding: 20px;
+        font-family: Segoe UI, Arial, sans-serif;
+      `;
+
+      modal.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
+          <h2 style="margin:0;font-size:22px;">Quick Update Field</h2>
+          <button id="__quickUpdateClose" style="
+            border:none;
+            background:#f3f3f3;
+            border-radius:10px;
+            padding:8px 12px;
+            cursor:pointer;
+            font-size:16px;
+          ">✖</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns: 440px 1fr; gap:20px; align-items:start;">
+          <div>
+            <label style="display:block;font-weight:600;margin-bottom:6px;">Entity logical name</label>
+            <input id="__quickUpdateEntity" type="text" placeholder="e.g. account"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;" />
+
+            <label style="display:block;font-weight:600;margin-bottom:6px;">Record GUID</label>
+            <input id="__quickUpdateId" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;" />
+
+            <label style="display:block;font-weight:600;margin-bottom:6px;">Field logical name</label>
+            <input id="__quickUpdateField" type="text" placeholder="e.g. name / ey_xxx / ownerid"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;" />
+
+            <label style="display:block;font-weight:600;margin-bottom:6px;">Field type</label>
+            <select id="__quickUpdateType"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;">
+              <option value="string">String</option>
+              <option value="memo">Memo</option>
+              <option value="integer">Whole Number</option>
+              <option value="decimal">Decimal</option>
+              <option value="double">Double</option>
+              <option value="boolean">Two Options</option>
+              <option value="datetime">Date Time</option>
+              <option value="optionset">Option Set (integer)</option>
+              <option value="lookup">Lookup (@odata.bind)</option>
+            </select>
+
+            <label style="display:block;font-weight:600;margin-bottom:6px;">New value</label>
+            <textarea id="__quickUpdateValue" spellcheck="false"
+              style="width:100%;min-height:120px;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;resize:vertical;"
+              placeholder="Enter new value"></textarea>
+
+            <div id="__quickUpdateLookupHelp" style="
+              display:none;
+              margin-bottom:12px;
+              padding:12px;
+              background:#f7f7f7;
+              border-radius:10px;
+              font-size:13px;
+              line-height:1.5;
+              white-space:pre-wrap;
+              color:#444;
+            ">For lookup use JSON:
+{
+  "entitySetName": "systemusers",
+  "id": "GUID"
+}</div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button id="__quickUpdateLoadCurrent" style="
+                border:none;
+                background:#0f6cbd;
+                color:white;
+                border-radius:10px;
+                padding:10px 16px;
+                cursor:pointer;
+                font-size:14px;
+              ">Load Current Value</button>
+
+              <button id="__quickUpdateSubmit" style="
+                border:none;
+                background:#107c10;
+                color:white;
+                border-radius:10px;
+                padding:10px 16px;
+                cursor:pointer;
+                font-size:14px;
+              ">Update</button>
+
+              <button id="__quickUpdateClear" style="
+                border:none;
+                background:#eaeaea;
+                color:#222;
+                border-radius:10px;
+                padding:10px 16px;
+                cursor:pointer;
+                font-size:14px;
+              ">Clear</button>
+            </div>
+          </div>
+
+          <div>
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+              margin-bottom:14px;
+            ">
+              <div style="
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">Current Value</div>
+              <div id="__quickUpdateCurrentValue" style="
+                padding:14px;
+                min-height:120px;
+                white-space:pre-wrap;
+                word-break:break-word;
+                font-family:Consolas, monospace;
+                font-size:13px;
+              ">Not loaded</div>
+            </div>
+
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+              margin-bottom:14px;
+            ">
+              <div style="
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">Payload Preview</div>
+              <div id="__quickUpdatePayloadPreview" style="
+                padding:14px;
+                min-height:120px;
+                white-space:pre-wrap;
+                word-break:break-word;
+                font-family:Consolas, monospace;
+                font-size:13px;
+              ">{}</div>
+            </div>
+
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+            ">
+              <div style="
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">Status</div>
+              <div id="__quickUpdateStatus" style="
+                padding:14px;
+                min-height:80px;
+                white-space:pre-wrap;
+                font-size:14px;
+              ">Ready</div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      const closeModal = () => overlay.remove();
+      document.getElementById("__quickUpdateClose").onclick = closeModal;
+
+      const entityInput = document.getElementById("__quickUpdateEntity");
+      const idInput = document.getElementById("__quickUpdateId");
+      const fieldInput = document.getElementById("__quickUpdateField");
+      const typeSelect = document.getElementById("__quickUpdateType");
+      const valueInput = document.getElementById("__quickUpdateValue");
+      const lookupHelp = document.getElementById("__quickUpdateLookupHelp");
+      const loadCurrentBtn = document.getElementById("__quickUpdateLoadCurrent");
+      const submitBtn = document.getElementById("__quickUpdateSubmit");
+      const clearBtn = document.getElementById("__quickUpdateClear");
+      const currentValueBox = document.getElementById("__quickUpdateCurrentValue");
+      const payloadPreviewBox = document.getElementById("__quickUpdatePayloadPreview");
+      const statusBox = document.getElementById("__quickUpdateStatus");
+
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+      const BASE_URL = `${clientUrl}/api/data/v9.2`;
+
+      function normalizeGuid(value) {
+        return String(value || "").replace(/[{}]/g, "").trim();
+      }
+
+      function isGuid(value) {
+        return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
+      }
+
+      async function fetchJSON(url, options = {}) {
+        const res = await fetch(url, {
+          ...options,
+          headers: {
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Accept": "application/json;odata.include-annotations=*",
+            "Content-Type": "application/json; charset=utf-8",
+            ...(options.headers || {})
+          },
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) {
+          let message = `${res.status}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        if (res.status === 204) return null;
+        return await res.json();
+      }
+
+      async function getEntitySetName(logicalName) {
+        const url =
+          `${BASE_URL}/EntityDefinitions(LogicalName='${logicalName}')?$select=EntitySetName`;
+
+        const data = await fetchJSON(url);
+        if (!data || !data.EntitySetName) {
+          throw new Error(`EntitySetName not found for '${logicalName}'`);
+        }
+
+        return data.EntitySetName;
+      }
+
+      function tryGetCurrentRecordContext() {
+        try {
+          if (window.Xrm?.Page?.data?.entity) {
+            const entityName = Xrm.Page.data.entity.getEntityName?.();
+            const id = normalizeGuid(Xrm.Page.data.entity.getId?.());
+            return { entityName, id };
+          }
+        } catch (_) {}
+
+        try {
+          const pageEntity = window.parent?.Xrm?.Page?.data?.entity;
+          if (pageEntity) {
+            const entityName = pageEntity.getEntityName?.();
+            const id = normalizeGuid(pageEntity.getId?.());
+            return { entityName, id };
+          }
+        } catch (_) {}
+
+        return null;
+      }
+
+      function updateLookupHelpVisibility() {
+        lookupHelp.style.display = typeSelect.value === "lookup" ? "block" : "none";
+      }
+
+      function parseInputValue(type, rawValue, fieldName) {
+        const value = rawValue ?? "";
+
+        switch (type) {
+          case "string":
+          case "memo":
+            return { [fieldName]: String(value) };
+
+          case "integer": {
+            if (String(value).trim() === "") throw new Error("Integer value is required");
+            const parsed = parseInt(value, 10);
+            if (Number.isNaN(parsed)) throw new Error("Invalid integer value");
+            return { [fieldName]: parsed };
+          }
+
+          case "decimal":
+          case "double": {
+            if (String(value).trim() === "") throw new Error("Numeric value is required");
+            const parsed = Number(value);
+            if (Number.isNaN(parsed)) throw new Error("Invalid numeric value");
+            return { [fieldName]: parsed };
+          }
+
+          case "boolean": {
+            const normalized = String(value).trim().toLowerCase();
+            if (["true", "1", "yes"].includes(normalized)) return { [fieldName]: true };
+            if (["false", "0", "no"].includes(normalized)) return { [fieldName]: false };
+            throw new Error("Boolean must be true/false or 1/0");
+          }
+
+          case "datetime": {
+            if (String(value).trim() === "") throw new Error("Datetime value is required");
+            const dt = new Date(value);
+            if (isNaN(dt.getTime())) throw new Error("Invalid datetime value");
+            return { [fieldName]: dt.toISOString() };
+          }
+
+          case "optionset": {
+            if (String(value).trim() === "") throw new Error("Option Set integer value is required");
+            const parsed = parseInt(value, 10);
+            if (Number.isNaN(parsed)) throw new Error("Invalid Option Set value");
+            return { [fieldName]: parsed };
+          }
+
+          case "lookup": {
+            let parsed;
+            try {
+              parsed = JSON.parse(value);
+            } catch (_) {
+              throw new Error('Lookup value must be JSON like {"entitySetName":"systemusers","id":"GUID"}');
+            }
+
+            const entitySetName = String(parsed.entitySetName || "").trim();
+            const id = normalizeGuid(parsed.id || "");
+
+            if (!entitySetName) throw new Error("Lookup JSON missing entitySetName");
+            if (!isGuid(id)) throw new Error("Lookup JSON contains invalid GUID");
+
+            return {
+              [`${fieldName}@odata.bind`]: `/${entitySetName}(${id})`
+            };
+          }
+
+          default:
+            throw new Error(`Unsupported field type: ${type}`);
+        }
+      }
+
+      function refreshPayloadPreview() {
+          try {
+            const fieldName = fieldInput.value.trim();
+            const type = typeSelect.value;
+            const rawValue = valueInput.value;
+
+            if (!fieldName) {
+              payloadPreviewBox.textContent = "{}";
+              return;
+            }
+
+            if (String(rawValue).trim() === "") {
+              payloadPreviewBox.textContent = "{}";
+              return;
+            }
+
+            const payload = parseInputValue(type, rawValue, fieldName);
+            payloadPreviewBox.textContent = JSON.stringify(payload, null, 2);
+          } catch (err) {
+            payloadPreviewBox.textContent = `Invalid payload: ${err.message}`;
+          }
+        }
+async function getLookupTargetEntity(entityLogicalName, fieldName) {
+  const url =
+    `${BASE_URL}/EntityDefinitions(LogicalName='${entityLogicalName}')` +
+    `/Attributes(LogicalName='${fieldName}')/Microsoft.Dynamics.CRM.LookupAttributeMetadata` +
+    `?$select=LogicalName,Targets`;
+
+  const data = await fetchJSON(url);
+
+  if (Array.isArray(data?.Targets) && data.Targets.length > 0) {
+    return data.Targets[0];
+  }
+
+  return null;
+}
+     async function loadCurrentValue() {
+  const entityLogicalName = entityInput.value.trim();
+  const recordId = normalizeGuid(idInput.value);
+  const fieldName = fieldInput.value.trim();
+  const fieldType = typeSelect.value;
+
+  if (!entityLogicalName) throw new Error("Entity logical name is required");
+  if (!fieldName) throw new Error("Field logical name is required");
+  if (!isGuid(recordId)) throw new Error("Valid GUID is required");
+
+  const entitySetName = await getEntitySetName(entityLogicalName);
+
+  let selectFieldName = fieldName;
+  let responseFieldName = fieldName;
+
+  if (fieldType === "lookup") {
+    selectFieldName = `_${fieldName}_value`;
+    responseFieldName = selectFieldName;
+  }
+
+  const url =
+    `${BASE_URL}/${entitySetName}(${recordId})?$select=${encodeURIComponent(selectFieldName)}`;
+
+  const data = await fetchJSON(url);
+
+  const raw = data[responseFieldName] ?? null;
+  const formatted =
+    data[`${responseFieldName}@OData.Community.Display.V1.FormattedValue`] ?? null;
+
+  const result = {
+    raw,
+    formatted
+  };
+
+  if (fieldType === "lookup") {
+    let logicalName =
+      data[`${responseFieldName}@Microsoft.Dynamics.CRM.lookuplogicalname`] ?? null;
+
+    if (!logicalName) {
+      try {
+        logicalName = await getLookupTargetEntity(entityLogicalName, fieldName);
+      } catch (_) {}
+    }
+
+    result.logicalName = logicalName ?? null;
+
+    if (raw && logicalName) {
+  try {
+    const lookupEntitySetName = await getEntitySetName(logicalName);
+
+    valueInput.value = JSON.stringify({
+      entitySetName: lookupEntitySetName,
+      id: raw
+    }, null, 2);
+
+    // 🔥 זה החדש — להביא שם
+    const name = await getLookupFormattedValue(logicalName, raw);
+
+    result.formatted = name;
+  } catch (_) {}
+}
+  }
+
+  currentValueBox.textContent = JSON.stringify(result, null, 2);
+  refreshPayloadPreview();
+}
+async function getLookupFormattedValue(entityLogicalName, id) {
+  const entitySetName = await getEntitySetName(entityLogicalName);
+  const primaryName = await getPrimaryNameField(entityLogicalName);
+
+  const url =
+    `${BASE_URL}/${entitySetName}(${id})?$select=${primaryName}`;
+
+  const data = await fetchJSON(url);
+
+  return data[primaryName] ?? null;
+}
+async function getPrimaryNameField(entityLogicalName) {
+  const url =
+    `${BASE_URL}/EntityDefinitions(LogicalName='${entityLogicalName}')?$select=PrimaryNameAttribute`;
+
+  const data = await fetchJSON(url);
+  return data.PrimaryNameAttribute;
+}
+      async function submitUpdate() {
+        const entityLogicalName = entityInput.value.trim();
+        const recordId = normalizeGuid(idInput.value);
+        const fieldName = fieldInput.value.trim();
+        const type = typeSelect.value;
+        const rawValue = valueInput.value;
+
+        if (!entityLogicalName) throw new Error("Entity logical name is required");
+        if (!fieldName) throw new Error("Field logical name is required");
+        if (!isGuid(recordId)) throw new Error("Valid GUID is required");
+
+        const payload = parseInputValue(type, rawValue, fieldName);
+        const entitySetName = await getEntitySetName(entityLogicalName);
+        const url = `${BASE_URL}/${entitySetName}(${recordId})`;
+
+        await fetchJSON(url, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+          headers: {
+            "If-Match": "*"
+          }
+        });
+
+        payloadPreviewBox.textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function clearForm() {
+        const detected = tryGetCurrentRecordContext();
+
+        fieldInput.value = "";
+        typeSelect.value = "string";
+        valueInput.value = "";
+        currentValueBox.textContent = "Not loaded";
+        payloadPreviewBox.textContent = "{}";
+        statusBox.textContent = "Ready";
+
+        if (detected?.entityName) entityInput.value = detected.entityName;
+        if (detected?.id) idInput.value = detected.id;
+
+        updateLookupHelpVisibility();
+        refreshPayloadPreview();
+      }
+
+      const detectedContext = tryGetCurrentRecordContext();
+      if (detectedContext?.entityName) entityInput.value = detectedContext.entityName;
+      if (detectedContext?.id) idInput.value = detectedContext.id;
+
+      updateLookupHelpVisibility();
+      refreshPayloadPreview();
+
+      typeSelect.addEventListener("change", () => {
+        updateLookupHelpVisibility();
+        refreshPayloadPreview();
+      });
+
+      fieldInput.addEventListener("input", refreshPayloadPreview);
+      valueInput.addEventListener("input", refreshPayloadPreview);
+
+      loadCurrentBtn.addEventListener("click", async () => {
+        loadCurrentBtn.disabled = true;
+        statusBox.textContent = "Loading current value...";
+
+        try {
+          await loadCurrentValue();
+          statusBox.textContent = "✅ Current value loaded";
+        } catch (err) {
+          statusBox.textContent = `❌ ${err.message}`;
+        } finally {
+          loadCurrentBtn.disabled = false;
+        }
+      });
+
+      submitBtn.addEventListener("click", async () => {
+        submitBtn.disabled = true;
+        statusBox.textContent = "Updating...";
+
+        try {
+          await submitUpdate();
+          statusBox.textContent = "✅ Record updated successfully";
+
+          try {
+            await loadCurrentValue();
+          } catch (_) {}
+        } catch (err) {
+          statusBox.textContent = `❌ ${err.message}`;
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+
+      clearBtn.addEventListener("click", clearForm);
+    }
+  });
+});
 
 
 
 
+document.getElementById("apiTesterUi").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
 
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: async () => {
+      document.getElementById("__d365helper_modal")?.remove();
 
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.35);
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        direction: ltr;
+      `;
 
+      const modal = document.createElement("div");
+      modal.style.cssText = `
+        width: min(1350px, 96vw);
+        max-height: 94vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,.25);
+        padding: 20px;
+        font-family: Segoe UI, Arial, sans-serif;
+      `;
 
+      modal.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
+          <h2 style="margin:0;font-size:22px;">API Tester / Custom Action Runner</h2>
+          <button id="__apiTesterClose" style="
+            border:none;
+            background:#f3f3f3;
+            border-radius:10px;
+            padding:8px 12px;
+            cursor:pointer;
+            font-size:16px;
+          ">✖</button>
+        </div>
 
+        <div style="display:grid;grid-template-columns: 480px 1fr; gap:20px; align-items:start;">
+          <div>
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+              margin-bottom:14px;
+            ">
+              <div style="
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">Request</div>
 
+              <div style="padding:14px;">
+                <label style="display:block;font-weight:600;margin-bottom:6px;">Method</label>
+                <select id="__apiTesterMethod"
+                  style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;">
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                  <option value="PATCH">PATCH</option>
+                  <option value="PUT">PUT</option>
+                  <option value="DELETE">DELETE</option>
+                </select>
 
+                <label style="display:block;font-weight:600;margin-bottom:6px;">URL</label>
+                <input id="__apiTesterUrl" type="text" placeholder="/api/data/v9.2/accounts?$top=5  OR  https://server/api/..."
+                  style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:8px;box-sizing:border-box;" />
 
+                <div style="font-size:12px;color:#666;margin-bottom:12px;line-height:1.5;">
+                  Supports both relative and absolute URLs.<br/>
+                  Examples:<br/>
+                  <code>/api/data/v9.2/WhoAmI</code><br/>
+                  <code>/api/data/v9.2/accounts?$top=5&$select=name</code><br/>
+                  <code>/api/data/v9.2/new_MyCustomApi</code><br/>
+                  <code>https://wsgend01:9642/crmapi/mac/v1/targets/DigitalService/0/63884548/1/activeaccount</code>
+                </div>
+
+                <label style="display:block;font-weight:600;margin-bottom:6px;">Headers (JSON)</label>
+                <textarea id="__apiTesterHeaders" spellcheck="false"
+                  style="width:100%;min-height:140px;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;resize:vertical;font-family:Consolas,monospace;font-size:13px;">{
+  "Accept": "application/json;odata.include-annotations=*"
+}</textarea>
+
+                <label style="display:block;font-weight:600;margin-bottom:6px;">Body (JSON)</label>
+                <textarea id="__apiTesterBody" spellcheck="false"
+                  style="width:100%;min-height:220px;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;resize:vertical;font-family:Consolas,monospace;font-size:13px;"
+                  placeholder='{
+  "name": "New Name"
+}'></textarea>
+
+                <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                  <button id="__apiTesterExecute" style="
+                    border:none;
+                    background:#107c10;
+                    color:white;
+                    border-radius:10px;
+                    padding:10px 16px;
+                    cursor:pointer;
+                    font-size:14px;
+                  ">Execute</button>
+
+                  <button id="__apiTesterUseCurrent" style="
+                    border:none;
+                    background:#0f6cbd;
+                    color:white;
+                    border-radius:10px;
+                    padding:10px 16px;
+                    cursor:pointer;
+                    font-size:14px;
+                  ">Use Current Record</button>
+
+                  <button id="__apiTesterPretty" style="
+                    border:none;
+                    background:#5c2d91;
+                    color:white;
+                    border-radius:10px;
+                    padding:10px 16px;
+                    cursor:pointer;
+                    font-size:14px;
+                  ">Pretty JSON</button>
+
+                  <button id="__apiTesterOpenGet" style="
+                    border:none;
+                    background:#eaeaea;
+                    color:#222;
+                    border-radius:10px;
+                    padding:10px 16px;
+                    cursor:pointer;
+                    font-size:14px;
+                  ">Open GET</button>
+
+                  <button id="__apiTesterClear" style="
+                    border:none;
+                    background:#eaeaea;
+                    color:#222;
+                    border-radius:10px;
+                    padding:10px 16px;
+                    cursor:pointer;
+                    font-size:14px;
+                  ">Clear</button>
+                </div>
+              </div>
+            </div>
+
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+            ">
+              <div style="
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">Quick Presets</div>
+
+              <div style="padding:14px;display:flex;gap:8px;flex-wrap:wrap;">
+                <button data-preset="whoami" class="__apiPresetBtn" style="border:none;background:#f3f3f3;border-radius:8px;padding:8px 12px;cursor:pointer;">WhoAmI</button>
+                <button data-preset="top5accounts" class="__apiPresetBtn" style="border:none;background:#f3f3f3;border-radius:8px;padding:8px 12px;cursor:pointer;">Top 5 Accounts</button>
+                <button data-preset="retrieveCurrent" class="__apiPresetBtn" style="border:none;background:#f3f3f3;border-radius:8px;padding:8px 12px;cursor:pointer;">Retrieve Current</button>
+                <button data-preset="patchCurrentName" class="__apiPresetBtn" style="border:none;background:#f3f3f3;border-radius:8px;padding:8px 12px;cursor:pointer;">Patch Current Name</button>
+                <button data-preset="externalSample" class="__apiPresetBtn" style="border:none;background:#f3f3f3;border-radius:8px;padding:8px 12px;cursor:pointer;">External Sample</button>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+              margin-bottom:14px;
+            ">
+              <div style="
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">Status</div>
+              <div id="__apiTesterStatus" style="
+                padding:14px;
+                min-height:70px;
+                white-space:pre-wrap;
+                font-size:14px;
+              ">Ready</div>
+            </div>
+
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+              margin-bottom:14px;
+            ">
+              <div style="
+                display:flex;justify-content:space-between;align-items:center;gap:12px;
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">
+                <div>Response Headers / Meta</div>
+                <button id="__apiTesterCopyMeta" style="
+                  border:none;background:#eaeaea;border-radius:8px;padding:8px 12px;cursor:pointer;">Copy Meta</button>
+              </div>
+              <div id="__apiTesterMeta" style="
+                padding:14px;
+                min-height:120px;
+                white-space:pre-wrap;
+                word-break:break-word;
+                font-family:Consolas, monospace;
+                font-size:13px;
+              ">{}</div>
+            </div>
+
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+            ">
+              <div style="
+                display:flex;justify-content:space-between;align-items:center;gap:12px;
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">
+                <div>Response Body</div>
+                <div style="display:flex;gap:8px;">
+                  <button id="__apiTesterCopyResponse" style="
+                    border:none;background:#eaeaea;border-radius:8px;padding:8px 12px;cursor:pointer;">Copy Response</button>
+                  <button id="__apiTesterCopyFetch" style="
+                    border:none;background:#eaeaea;border-radius:8px;padding:8px 12px;cursor:pointer;">Copy fetch</button>
+                </div>
+              </div>
+              <div id="__apiTesterResponse" style="
+                padding:14px;
+                min-height:320px;
+                white-space:pre-wrap;
+                word-break:break-word;
+                font-family:Consolas, monospace;
+                font-size:13px;
+              ">{}</div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      const closeBtn = document.getElementById("__apiTesterClose");
+      const methodSelect = document.getElementById("__apiTesterMethod");
+      const urlInput = document.getElementById("__apiTesterUrl");
+      const headersInput = document.getElementById("__apiTesterHeaders");
+      const bodyInput = document.getElementById("__apiTesterBody");
+      const executeBtn = document.getElementById("__apiTesterExecute");
+      const useCurrentBtn = document.getElementById("__apiTesterUseCurrent");
+      const prettyBtn = document.getElementById("__apiTesterPretty");
+      const openGetBtn = document.getElementById("__apiTesterOpenGet");
+      const clearBtn = document.getElementById("__apiTesterClear");
+      const statusBox = document.getElementById("__apiTesterStatus");
+      const metaBox = document.getElementById("__apiTesterMeta");
+      const responseBox = document.getElementById("__apiTesterResponse");
+      const copyResponseBtn = document.getElementById("__apiTesterCopyResponse");
+      const copyMetaBtn = document.getElementById("__apiTesterCopyMeta");
+      const copyFetchBtn = document.getElementById("__apiTesterCopyFetch");
+
+      closeBtn.onclick = () => overlay.remove();
+
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+      const BASE_API = `${clientUrl}/api/data/v9.2`;
+
+      function normalizeGuid(value) {
+        return String(value || "").replace(/[{}]/g, "").trim().toLowerCase();
+      }
+
+      function tryParseJson(text, fallback) {
+        const trimmed = String(text || "").trim();
+        if (!trimmed) return fallback;
+        return JSON.parse(trimmed);
+      }
+
+      function safePretty(value) {
+        try {
+          return JSON.stringify(value, null, 2);
+        } catch (_) {
+          return String(value);
+        }
+      }
+
+      async function copyText(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (_) {
+          const temp = document.createElement("textarea");
+          temp.value = text;
+          document.body.appendChild(temp);
+          temp.select();
+          try {
+            document.execCommand("copy");
+            return true;
+          } catch (_) {
+            return false;
+          } finally {
+            temp.remove();
+          }
+        }
+      }
+
+      async function getEntitySetName(logicalName) {
+        const url =
+          `${BASE_API}/EntityDefinitions(LogicalName='${logicalName}')?$select=EntitySetName`;
+
+        const res = await fetch(url, {
+          headers: {
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Accept": "application/json"
+          },
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) {
+          let message = `Failed to get EntitySetName for ${logicalName}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        const data = await res.json();
+        return data.EntitySetName;
+      }
+
+      function tryGetCurrentRecordContext() {
+        try {
+          if (window.Xrm?.Page?.data?.entity) {
+            return {
+              entityLogicalName: Xrm.Page.data.entity.getEntityName?.() || null,
+              id: normalizeGuid(Xrm.Page.data.entity.getId?.() || ""),
+              formType: Xrm.Page.ui?.getFormType?.() || null
+            };
+          }
+        } catch (_) {}
+
+        try {
+          const pageEntity = window.parent?.Xrm?.Page?.data?.entity;
+          if (pageEntity) {
+            return {
+              entityLogicalName: pageEntity.getEntityName?.() || null,
+              id: normalizeGuid(pageEntity.getId?.() || ""),
+              formType: window.parent?.Xrm?.Page?.ui?.getFormType?.() || null
+            };
+          }
+        } catch (_) {}
+
+        return null;
+      }
+
+      function resolveUrl(inputUrl) {
+        const trimmed = String(inputUrl || "").trim();
+        if (!trimmed) throw new Error("URL is required");
+
+        if (/^https?:\/\//i.test(trimmed)) {
+          return trimmed;
+        }
+
+        if (trimmed.startsWith("/")) return `${clientUrl}${trimmed}`;
+        if (trimmed.startsWith("api/")) return `${clientUrl}/${trimmed}`;
+
+        return `${clientUrl}/api/data/v9.2/${trimmed}`;
+      }
+
+      function buildFetchSnippet(method, inputUrl, headers, bodyText) {
+        const absUrl = resolveUrl(inputUrl);
+        const options = {
+          method,
+          headers
+        };
+
+        if (!["GET", "DELETE"].includes(method) && String(bodyText || "").trim()) {
+          options.body = bodyText;
+        }
+
+        return `fetch(${JSON.stringify(absUrl)}, ${safePretty(options)})
+  .then(async (res) => {
+    const text = await res.text();
+    let data = text;
+    try { data = JSON.parse(text); } catch (_) {}
+    console.log("status", res.status, res.statusText);
+    console.log(data);
+  });`;
+      }
+
+      async function executeRequest() {
+        const method = methodSelect.value;
+        const inputUrl = String(urlInput.value || "").trim();
+        const absoluteUrl = resolveUrl(inputUrl);
+
+        let customHeaders = {};
+        try {
+          customHeaders = tryParseJson(headersInput.value, {});
+          if (typeof customHeaders !== "object" || Array.isArray(customHeaders) || customHeaders === null) {
+            throw new Error("Headers must be a JSON object");
+          }
+        } catch (err) {
+          throw new Error(`Invalid headers JSON: ${err.message}`);
+        }
+
+        const isExternal = /^https?:\/\//i.test(inputUrl);
+
+        const defaultHeaders = isExternal
+          ? {}
+          : {
+              "OData-MaxVersion": "4.0",
+              "OData-Version": "4.0",
+              "Accept": "application/json;odata.include-annotations=*"
+            };
+
+        const headers = {
+          ...defaultHeaders,
+          ...customHeaders
+        };
+
+        let requestBody = null;
+        const rawBody = String(bodyInput.value || "").trim();
+
+        if (!["GET", "DELETE"].includes(method) && rawBody) {
+          try {
+            requestBody = JSON.parse(rawBody);
+          } catch (err) {
+            throw new Error(`Invalid body JSON: ${err.message}`);
+          }
+
+          if (!headers["Content-Type"] && !headers["content-type"]) {
+            headers["Content-Type"] = "application/json; charset=utf-8";
+          }
+        }
+
+        const startedAt = performance.now();
+const res = await fetch(absoluteUrl, {
+  method,
+  headers,
+  body: requestBody !== null ? JSON.stringify(requestBody) : undefined,
+  credentials: isExternal ? "omit" : "include"
+});
+
+        const endedAt = performance.now();
+
+        const responseHeaders = {};
+        try {
+          for (const [k, v] of res.headers.entries()) {
+            responseHeaders[k] = v;
+          }
+        } catch (_) {}
+
+        const rawText = await res.text();
+
+        let responseBody;
+        if (!rawText) {
+          responseBody = null;
+        } else {
+          try {
+            responseBody = JSON.parse(rawText);
+          } catch (_) {
+            responseBody = rawText;
+          }
+        }
+
+        const meta = {
+          ok: res.ok,
+          status: res.status,
+          statusText: res.statusText,
+          durationMs: Math.round(endedAt - startedAt),
+          isExternal,
+          request: {
+            method,
+            inputUrl,
+            absoluteUrl
+          },
+          responseHeaders
+        };
+
+        return { meta, responseBody, ok: res.ok };
+      }
+
+      async function fillCurrentRecordUrl() {
+        const ctx = tryGetCurrentRecordContext();
+
+        if (!ctx?.entityLogicalName) {
+          throw new Error("Could not detect current record context");
+        }
+
+        if (!ctx?.id) {
+          throw new Error("Current form has no saved record id");
+        }
+
+        const entitySetName = await getEntitySetName(ctx.entityLogicalName);
+
+        methodSelect.value = "GET";
+        urlInput.value = `/api/data/v9.2/${entitySetName}(${ctx.id})`;
+        bodyInput.value = "";
+        statusBox.textContent = `Loaded current record URL for ${ctx.entityLogicalName}`;
+      }
+
+      function prettyJsonEditors() {
+        try {
+          const headers = tryParseJson(headersInput.value, {});
+          headersInput.value = JSON.stringify(headers, null, 2);
+        } catch (_) {}
+
+        try {
+          const body = tryParseJson(bodyInput.value, null);
+          if (body !== null) {
+            bodyInput.value = JSON.stringify(body, null, 2);
+          }
+        } catch (_) {}
+      }
+
+      function clearAll() {
+        methodSelect.value = "GET";
+        urlInput.value = "";
+        headersInput.value = `{
+  "Accept": "application/json;odata.include-annotations=*"
+}`;
+        bodyInput.value = "";
+        metaBox.textContent = "{}";
+        responseBox.textContent = "{}";
+        statusBox.textContent = "Ready";
+      }
+
+      function applyPreset(name) {
+        const ctx = tryGetCurrentRecordContext();
+
+        if (name === "whoami") {
+          methodSelect.value = "GET";
+          urlInput.value = "/api/data/v9.2/WhoAmI";
+          bodyInput.value = "";
+          return;
+        }
+
+        if (name === "top5accounts") {
+          methodSelect.value = "GET";
+          urlInput.value = "/api/data/v9.2/accounts?$top=5&$select=name,accountid";
+          bodyInput.value = "";
+          return;
+        }
+
+        if (name === "retrieveCurrent") {
+          if (!ctx?.entityLogicalName || !ctx?.id) {
+            statusBox.textContent = "❌ No saved current record detected";
+            return;
+          }
+
+          getEntitySetName(ctx.entityLogicalName)
+            .then((entitySetName) => {
+              methodSelect.value = "GET";
+              urlInput.value = `/api/data/v9.2/${entitySetName}(${ctx.id})`;
+              bodyInput.value = "";
+              statusBox.textContent = "Loaded preset: Retrieve Current";
+            })
+            .catch((err) => {
+              statusBox.textContent = `❌ ${err.message}`;
+            });
+
+          return;
+        }
+
+        if (name === "patchCurrentName") {
+          if (!ctx?.entityLogicalName || !ctx?.id) {
+            statusBox.textContent = "❌ No saved current record detected";
+            return;
+          }
+
+          getEntitySetName(ctx.entityLogicalName)
+            .then((entitySetName) => {
+              methodSelect.value = "PATCH";
+              urlInput.value = `/api/data/v9.2/${entitySetName}(${ctx.id})`;
+              bodyInput.value = `{
+  "name": "Updated from API Tester"
+}`;
+              statusBox.textContent = "Loaded preset: Patch Current Name";
+            })
+            .catch((err) => {
+              statusBox.textContent = `❌ ${err.message}`;
+            });
+
+          return;
+        }
+
+        if (name === "externalSample") {
+          methodSelect.value = "GET";
+          urlInput.value = "https://wsgend01:9642/crmapi/mac/v1/targets/DigitalService/0/63884548/1/activeaccount";
+          headersInput.value = `{
+  "Accept": "application/json"
+}`;
+          bodyInput.value = "";
+          statusBox.textContent = "Loaded preset: External Sample";
+          return;
+        }
+      }
+
+      executeBtn.addEventListener("click", async () => {
+        executeBtn.disabled = true;
+        statusBox.textContent = "Executing...";
+        metaBox.textContent = "{}";
+        responseBox.textContent = "{}";
+
+        try {
+          const { meta, responseBody, ok } = await executeRequest();
+
+          metaBox.textContent = safePretty(meta);
+          responseBox.textContent = safePretty(responseBody);
+
+          statusBox.textContent =
+            `${ok ? "✅" : "❌"} ${meta.status} ${meta.statusText}\n` +
+            `Duration: ${meta.durationMs} ms\n` +
+            `${meta.request.method} ${meta.request.inputUrl}`;
+        } catch (err) {
+          statusBox.textContent = `❌ ${err.message}`;
+          responseBox.textContent = safePretty({
+            error: err.message
+          });
+        } finally {
+          executeBtn.disabled = false;
+        }
+      });
+
+      useCurrentBtn.addEventListener("click", async () => {
+        useCurrentBtn.disabled = true;
+
+        try {
+          await fillCurrentRecordUrl();
+        } catch (err) {
+          statusBox.textContent = `❌ ${err.message}`;
+        } finally {
+          useCurrentBtn.disabled = false;
+        }
+      });
+
+      prettyBtn.addEventListener("click", () => {
+        prettyJsonEditors();
+        statusBox.textContent = "JSON pretty-printed";
+      });
+
+      openGetBtn.addEventListener("click", () => {
+        try {
+          const method = methodSelect.value;
+          if (method !== "GET") {
+            throw new Error("Open GET works only for GET requests");
+          }
+
+          const absoluteUrl = resolveUrl(urlInput.value);
+          window.open(absoluteUrl, "_blank");
+        } catch (err) {
+          statusBox.textContent = `❌ ${err.message}`;
+        }
+      });
+
+      clearBtn.addEventListener("click", clearAll);
+
+      copyResponseBtn.addEventListener("click", async () => {
+        const ok = await copyText(responseBox.textContent || "");
+        statusBox.textContent = ok ? "Response copied" : "Failed to copy response";
+      });
+
+      copyMetaBtn.addEventListener("click", async () => {
+        const ok = await copyText(metaBox.textContent || "");
+        statusBox.textContent = ok ? "Meta copied" : "Failed to copy meta";
+      });
+
+      copyFetchBtn.addEventListener("click", async () => {
+        try {
+          const method = methodSelect.value;
+          const inputUrl = String(urlInput.value || "").trim();
+
+          let headers = {};
+          try {
+            headers = tryParseJson(headersInput.value, {});
+          } catch (_) {}
+
+          const snippet = buildFetchSnippet(method, inputUrl, headers, bodyInput.value);
+          const ok = await copyText(snippet);
+          statusBox.textContent = ok ? "fetch snippet copied" : "Failed to copy fetch snippet";
+        } catch (err) {
+          statusBox.textContent = `❌ ${err.message}`;
+        }
+      });
+
+      document.querySelectorAll(".__apiPresetBtn").forEach((btn) => {
+        btn.addEventListener("click", () => applyPreset(btn.dataset.preset));
+      });
+
+      const ctx = tryGetCurrentRecordContext();
+      if (ctx?.entityLogicalName && ctx?.id) {
+        statusBox.textContent = `Ready\nCurrent record: ${ctx.entityLogicalName} (${ctx.id})`;
+      }
+    }
+  });
+});
