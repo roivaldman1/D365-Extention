@@ -3490,1892 +3490,6 @@ document.getElementById("getSystemRolesByPrivilege").addEventListener("click", a
     }
   });
 });
-document.getElementById("assignSecurityRoleUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) return;
-
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: false },
-    world: "MAIN",
-    func: async () => {
-      document.getElementById("__d365helper_modal")?.remove();
-
-      const overlay = document.createElement("div");
-      overlay.id = "__d365helper_modal";
-      overlay.style.cssText = `
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,.35);
-        z-index: 2147483647;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-        direction: rtl;
-      `;
-
-      const modal = document.createElement("div");
-      modal.style.cssText = `
-        width: min(980px, 96vw);
-        max-height: 92vh;
-        overflow: auto;
-        background: #fff;
-        border-radius: 16px;
-        box-shadow: 0 20px 60px rgba(0,0,0,.25);
-        padding: 20px;
-        font-family: Segoe UI, Arial, sans-serif;
-      `;
-
-      modal.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
-          <h2 style="margin:0;font-size:22px;">הקצאת תפקיד אבטחה למשתמש</h2>
-          <button id="__assignRoleClose" style="
-            border:none;
-            background:#f3f3f3;
-            border-radius:10px;
-            padding:8px 12px;
-            cursor:pointer;
-            font-size:16px;
-          ">✖</button>
-        </div>
-        <div style="margin-bottom:14px;padding:10px 12px;background:#f7f7f7;border-radius:10px;">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
-            <input id="__assignRoleUseCurrentUser" type="checkbox" />
-            בצע עליי (המשתמש המחובר)
-          </label>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
-          <div>
-            <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש משתמש</label>
-            <input id="__assignRoleUserSearch" type="text" placeholder="חפש לפי שם / יוזר / מייל"
-              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
-            <select id="__assignRoleUserSelect" size="16"
-              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
-          </div>
-
-          <div>
-            <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש תפקיד אבטחה</label>
-            <input id="__assignRoleRoleSearch" type="text" placeholder="חפש תפקיד"
-              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
-            <select id="__assignRoleRoleSelect" size="16"
-              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
-          </div>
-        </div>
-
-        <div style="display:flex;gap:10px;justify-content:flex-start;margin-top:18px;">
-          <button id="__assignRoleSubmit" style="
-            border:none;
-            background:#0f6cbd;
-            color:white;
-            border-radius:10px;
-            padding:10px 18px;
-            cursor:pointer;
-            font-size:15px;
-          ">הקצה תפקיד</button>
-
-          <button id="__assignRoleCancel" style="
-            border:none;
-            background:#eaeaea;
-            color:#222;
-            border-radius:10px;
-            padding:10px 18px;
-            cursor:pointer;
-            font-size:15px;
-          ">סגור</button>
-        </div>
-
-        <div id="__assignRoleStatus" style="
-          margin-top:14px;
-          padding:10px 12px;
-          background:#f7f7f7;
-          border-radius:10px;
-          min-height:22px;
-          white-space:pre-wrap;
-          font-size:14px;
-        "></div>
-      `;
-
-      overlay.appendChild(modal);
-      document.body.appendChild(overlay);
-
-      const closeModal = () => overlay.remove();
-      document.getElementById("__assignRoleClose").onclick = closeModal;
-      document.getElementById("__assignRoleCancel").onclick = closeModal;
-   
-      const userSearchInput = document.getElementById("__assignRoleUserSearch");
-      const userSelect = document.getElementById("__assignRoleUserSelect");
-      const roleSearchInput = document.getElementById("__assignRoleRoleSearch");
-      const roleSelect = document.getElementById("__assignRoleRoleSelect");
-      const submitBtn = document.getElementById("__assignRoleSubmit");
-      const statusBox = document.getElementById("__assignRoleStatus");
-      const useCurrentUserCheckbox = document.getElementById("__assignRoleUseCurrentUser");
-      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
-      const BASE_URL = `${clientUrl}/api/data/v9.2`;
-
-      let allUsers = [];
-      let allRoles = [];
-  async function assignRoleToCurrentUser(roleId) {
-        const currentUserId = Xrm.Utility.getGlobalContext().userSettings.userId.replace(/[{}]/g, "");
-
-        const user = await fetchJSON(
-          `${BASE_URL}/systemusers(${currentUserId})?$select=systemuserid,fullname,domainname,isdisabled`
-        );
-
-        const roleData = await fetchJSON(
-          `${BASE_URL}/roles(${roleId})?$select=roleid,name`
-        );
-      if (!roleData?.roleid) throw new Error(`תפקיד לא נמצא: ${roleId}`);
-
-        const res = await fetch(
-          `${BASE_URL}/systemusers(${user.systemuserid})/systemuserroles_association/$ref`,
-          {
-            method: "POST",
-            headers: {
-              "OData-MaxVersion": "4.0",
-              "OData-Version": "4.0",
-              "Accept": "application/json",
-              "Content-Type": "application/json"
-            },
-            credentials: "same-origin",
-            body: JSON.stringify({
-              "@odata.id": `${BASE_URL}/roles(${roleData.roleid})`
-                })
-              }
-            );
-
-        if (!res.ok) {
-          let message = `${res.status}`;
-          try {
-            const err = await res.json();
-            message = err?.error?.message || message;
-          } catch (_) {}
-          throw new Error(message);
-        }
-
-        return { user, role: roleData };
-      }
-      function escapeODataString(str) {
-        return String(str ?? "").replace(/'/g, "''");
-      }
-      function toggleUserSelectionState() {
-        const disabled = useCurrentUserCheckbox.checked;
-
-        userSearchInput.disabled = disabled;
-        userSelect.disabled = disabled;
-
-        userSearchInput.style.opacity = disabled ? "0.6" : "1";
-        userSelect.style.opacity = disabled ? "0.6" : "1";
-      }
-      useCurrentUserCheckbox.addEventListener("change", toggleUserSelectionState);
-      toggleUserSelectionState();
-      async function fetchJSON(url, options = {}) {
-        const res = await fetch(url, {
-          ...options,
-          headers: {
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0",
-            "Accept": "application/json",
-            ...(options.headers || {})
-          },
-          credentials: "same-origin"
-        });
-
-        if (!res.ok) {
-          let message = `${res.status}`;
-          try {
-            const err = await res.json();
-            message = err?.error?.message || message;
-          } catch (_) {}
-          throw new Error(message);
-        }
-
-        return await res.json();
-      }
-
-      async function fetchAllPages(url) {
-        let all = [];
-        let nextUrl = url;
-
-        while (nextUrl) {
-          const data = await fetchJSON(nextUrl);
-          all = all.concat(data.value || []);
-          nextUrl = data["@odata.nextLink"] || null;
-        }
-
-        return all;
-      }
-
-      async function assignRoleByName_ByUsername(username, roleName) {
-        username = username + "@mac.org.il";
-
-        const users = await fetchJSON(
-          `${BASE_URL}/systemusers?$filter=domainname eq '${escapeODataString(username)}'&$select=systemuserid,fullname,domainname,isdisabled`
-        );
-        if (!users.value.length) throw new Error(`משתמש לא נמצא: ${username}`);
-        const user = users.value[0];
-
-        const roles = await fetchJSON(
-          `${BASE_URL}/roles?$filter=name eq '${escapeODataString(roleName)}'&$select=roleid,name`
-        );
-        if (!roles.value.length) throw new Error(`תפקיד לא נמצא: ${roleName}`);
-        const role = roles.value[0];
-
-        const res = await fetch(
-          `${BASE_URL}/systemusers(${user.systemuserid})/systemuserroles_association/$ref`,
-          {
-            method: "POST",
-            headers: {
-              "OData-MaxVersion": "4.0",
-              "OData-Version": "4.0",
-              "Accept": "application/json",
-              "Content-Type": "application/json"
-            },
-            credentials: "same-origin",
-            body: JSON.stringify({
-              "@odata.id": `${BASE_URL}/roles(${role.roleid})`
-            })
-          }
-        );
-
-        if (!res.ok) {
-          let message = `${res.status}`;
-          try {
-            const err = await res.json();
-            message = err?.error?.message || message;
-          } catch (_) {}
-          throw new Error(message);
-        }
-
-        return { user, role };
-      }
-
-      async function loadUsers() {
-        const users = await fetchAllPages(
-          `${BASE_URL}/systemusers?$select=systemuserid,fullname,domainname,isdisabled,internalemailaddress&$orderby=fullname asc`
-        );
-
-        allUsers = users.map(u => {
-          const domain = u.domainname || "";
-          const email = u.internalemailaddress || "";
-          const username = domain ? domain.replace(/@mac\.org\.il$/i, "") : "";
-
-          return {
-            id: u.systemuserid,
-            fullname: u.fullname || "",
-            domainname: domain,
-            internalemailaddress: email,
-            isdisabled: !!u.isdisabled,
-            username: username
-          };
-        });
-      }
-
-      async function loadRoles() {
-        const businessUnits = await fetchAllPages(
-          `${BASE_URL}/businessunits?$select=businessunitid,name,_parentbusinessunitid_value`
-        );
-
-        const rootBusinessUnit = businessUnits.find(bu => !bu._parentbusinessunitid_value);
-        if (!rootBusinessUnit) {
-          throw new Error("לא נמצאה יחידה עסקית ראשית");
-        }
-
-        const rootBusinessUnitId = rootBusinessUnit.businessunitid;
-
-        const roles = await fetchAllPages(
-          `${BASE_URL}/roles?$select=roleid,name,_businessunitid_value&$orderby=name asc`
-        );
-
-        allRoles = roles
-          .filter(r => r.name && r._businessunitid_value === rootBusinessUnitId)
-          .sort((a, b) => (a.name || "").localeCompare(b.name || "", "he"))
-          .map(r => ({
-            id: r.roleid,
-            name: r.name || "",
-            businessunitid: r._businessunitid_value
-          }));
-      }
-async function assignRoleById_ToUsername(username, roleId) {
-  username = username + "@mac.org.il";
-
-  const users = await fetchJSON(
-    `${BASE_URL}/systemusers?$filter=domainname eq '${escapeODataString(username)}'&$select=systemuserid,fullname,domainname,isdisabled`
-  );
-  if (!users.value.length) throw new Error(`משתמש לא נמצא: ${username}`);
-  const user = users.value[0];
-
-  const roleData = await fetchJSON(
-    `${BASE_URL}/roles(${roleId})?$select=roleid,name`
-  );
-  if (!roleData?.roleid) throw new Error(`תפקיד לא נמצא: ${roleId}`);
-
-  const res = await fetch(
-    `${BASE_URL}/systemusers(${user.systemuserid})/systemuserroles_association/$ref`,
-    {
-      method: "POST",
-      headers: {
-        "OData-MaxVersion": "4.0",
-        "OData-Version": "4.0",
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-      },
-      credentials: "same-origin",
-      body: JSON.stringify({
-        "@odata.id": `${BASE_URL}/roles(${roleData.roleid})`
-      })
-    }
-  );
-
-  if (!res.ok) {
-    let message = `${res.status}`;
-    try {
-      const err = await res.json();
-      message = err?.error?.message || message;
-    } catch (_) {}
-    throw new Error(message);
-  }
-
-  return { user, role: roleData };
-}
-      function renderUsers(searchText = "") {
-        const q = searchText.trim().toLowerCase();
-        userSelect.innerHTML = "";
-
-        const filtered = allUsers.filter(u => {
-          if (!q) return true;
-
-          return (
-            (u.fullname || "").toLowerCase().includes(q) ||
-            (u.domainname || "").toLowerCase().includes(q) ||
-            (u.username || "").toLowerCase().includes(q) ||
-            (u.internalemailaddress || "").toLowerCase().includes(q)
-          );
-        });
-
-        for (const user of filtered) {
-          const option = document.createElement("option");
-          option.value = user.username || user.domainname || user.fullname;
-
-          const statusText = user.isdisabled ? "לא פעיל" : "פעיל";
-          const userLabel = user.username || user.domainname || "ללא domainname";
-
-          option.textContent = `${user.fullname || "(ללא שם)"} | ${userLabel} | ${statusText}`;
-          option.dataset.domainname = user.domainname || "";
-          option.dataset.userid = user.id;
-          option.dataset.isdisabled = String(user.isdisabled);
-          option.dataset.email = user.internalemailaddress || "";
-          userSelect.appendChild(option);
-        }
-
-        if (filtered.length > 0) userSelect.selectedIndex = 0;
-      }
-
-      function renderRoles(searchText = "") {
-        const q = searchText.trim().toLowerCase();
-        roleSelect.innerHTML = "";
-
-        const filtered = allRoles.filter(r => {
-          if (!q) return true;
-          return (r.name || "").toLowerCase().includes(q);
-        });
-
-        for (const role of filtered) {
-          const option = document.createElement("option");
-          option.value = role.name;
-          option.textContent = role.name;
-          option.dataset.roleid = role.id;
-          roleSelect.appendChild(option);
-        }
-
-        if (filtered.length > 0) roleSelect.selectedIndex = 0;
-      }
-
-      try {
-        statusBox.textContent = "טוען את כל המשתמשים (פעילים ולא פעילים) ואת כל התפקידים...";
-        await Promise.all([loadUsers(), loadRoles()]);
-        renderUsers();
-        renderRoles();
-
-        const activeCount = allUsers.filter(u => !u.isdisabled).length;
-        const disabledCount = allUsers.filter(u => u.isdisabled).length;
-
-        statusBox.textContent =
-          `✅ נטענו ${allUsers.length} משתמשים (${activeCount} פעילים, ${disabledCount} לא פעילים)\n` +
-          `✅ נטענו ${allRoles.length} תפקידים`;
-      } catch (err) {
-        statusBox.textContent = `❌ שגיאה בטעינה: ${err.message}`;
-        return;
-      }
-
-      userSearchInput.addEventListener("input", () => renderUsers(userSearchInput.value));
-      roleSearchInput.addEventListener("input", () => renderRoles(roleSearchInput.value));
-
-      userSearchInput.addEventListener("keydown", (e) => {
-        if (e.key === "ArrowDown") {
-          userSelect.focus();
-          if (userSelect.options.length && userSelect.selectedIndex < 0) {
-            userSelect.selectedIndex = 0;
-          }
-        }
-      });
-
-      roleSearchInput.addEventListener("keydown", (e) => {
-        if (e.key === "ArrowDown") {
-          roleSelect.focus();
-          if (roleSelect.options.length && roleSelect.selectedIndex < 0) {
-            roleSelect.selectedIndex = 0;
-          }
-        }
-      });
-
-      submitBtn.addEventListener("click", async () => {
-  const selectedRole = roleSelect.options[roleSelect.selectedIndex];
-
-  if (!selectedRole) {
-    statusBox.textContent = "צריך לבחור תפקיד מהרשימה.";
-    return;
-  }
-
-  const useCurrentUser = useCurrentUserCheckbox.checked;
-  const roleId = selectedRole.dataset.roleid;
-  const roleName = selectedRole.value;
-
-  let selectedUser = null;
-  let username = null;
-
-  if (!useCurrentUser) {
-    selectedUser = userSelect.options[userSelect.selectedIndex];
-
-    if (!selectedUser) {
-      statusBox.textContent = "צריך לבחור משתמש מהרשימה או לסמן 'בצע עליי'.";
-      return;
-    }
-
-    username = selectedUser.value;
-
-    if (!username) {
-      statusBox.textContent = "למשתמש שנבחר אין domainname / username תקין.";
-      return;
-    }
-  }
-
-  submitBtn.disabled = true;
-
-  if (useCurrentUser) {
-    statusBox.textContent = `מקצה את התפקיד "${roleName}" למשתמש המחובר...`;
-  } else {
-    statusBox.textContent = `מקצה את התפקיד "${roleName}" למשתמש "${username}"...`;
-  }
-
-  try {
-    let result;
-
-    if (useCurrentUser) {
-      result = await assignRoleToCurrentUser(roleId);
-    } else {
-      result = await assignRoleById_ToUsername(username, roleId);
-    }
-
-    statusBox.textContent =
-      `✅ התפקיד הוקצה בהצלחה\n` +
-      `משתמש: ${result.user.fullname} (${result.user.domainname || "ללא domainname"})\n` +
-      `סטטוס: ${result.user.isdisabled ? "לא פעיל" : "פעיל"}\n` +
-      `תפקיד: ${result.role.name}`;
-  } catch (err) {
-    statusBox.textContent = `❌ שגיאה: ${err.message}`;
-  } finally {
-    submitBtn.disabled = false;
-  }
-});
-    }
-  });
-});
-
-document.getElementById("getUserSecurityRolesUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) return;
-
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: false },
-    world: "MAIN",
-    func: async () => {
-      document.getElementById("__d365helper_modal")?.remove();
-
-      const overlay = document.createElement("div");
-      overlay.id = "__d365helper_modal";
-      overlay.style.cssText = `
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,.35);
-        z-index: 2147483647;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-        direction: rtl;
-      `;
-
-      const modal = document.createElement("div");
-      modal.style.cssText = `
-        width: min(1100px, 96vw);
-        max-height: 92vh;
-        overflow: auto;
-        background: #fff;
-        border-radius: 16px;
-        box-shadow: 0 20px 60px rgba(0,0,0,.25);
-        padding: 20px;
-        font-family: Segoe UI, Arial, sans-serif;
-      `;
-
-      modal.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
-          <h2 style="margin:0;font-size:22px;">תפקידי אבטחה למשתמש</h2>
-          <button id="__userRolesClose" style="
-            border:none;
-            background:#f3f3f3;
-            border-radius:10px;
-            padding:8px 12px;
-            cursor:pointer;
-            font-size:16px;
-          ">✖</button>
-        </div>
-
-        <div style="display:grid;grid-template-columns:380px 1fr;gap:20px;align-items:start;">
-          <div>
-            <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש משתמש</label>
-            <input id="__userRolesUserSearch" type="text" placeholder="חפש לפי שם / יוזר / מייל"
-              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
-
-            <select id="__userRolesUserSelect" size="18"
-              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
-
-            <div style="display:flex;gap:10px;justify-content:flex-start;margin-top:14px;">
-              <button id="__userRolesSubmit" style="
-                border:none;
-                background:#0f6cbd;
-                color:white;
-                border-radius:10px;
-                padding:10px 18px;
-                cursor:pointer;
-                font-size:15px;
-              ">הצג תפקידים</button>
-
-              <button id="__userRolesClear" style="
-                border:none;
-                background:#eaeaea;
-                color:#222;
-                border-radius:10px;
-                padding:10px 18px;
-                cursor:pointer;
-                font-size:15px;
-              ">נקה</button>
-            </div>
-          </div>
-
-          <div>
-            <div id="__userRolesSelectedUser" style="
-              margin-bottom:12px;
-              padding:10px 12px;
-              background:#f7f7f7;
-              border-radius:10px;
-              min-height:20px;
-              font-weight:600;
-            ">לא נבחר משתמש</div>
-
-            <div id="__userRolesResults" style="
-              border:1px solid #ddd;
-              border-radius:12px;
-              overflow:hidden;
-              background:#fff;
-            ">
-              <div style="
-                display:grid;
-                grid-template-columns: 1.6fr 1fr;
-                gap:0;
-                background:#f3f3f3;
-                font-weight:700;
-                padding:12px;
-                border-bottom:1px solid #ddd;
-              ">
-                <div>תפקיד אבטחה</div>
-                <div>יחידה עסקית</div>
-              </div>
-
-              <div id="__userRolesRows" style="max-height:520px;overflow:auto;"></div>
-            </div>
-          </div>
-        </div>
-
-        <div id="__userRolesStatus" style="
-          margin-top:14px;
-          padding:10px 12px;
-          background:#f7f7f7;
-          border-radius:10px;
-          min-height:22px;
-          white-space:pre-wrap;
-          font-size:14px;
-        "></div>
-      `;
-
-      overlay.appendChild(modal);
-      document.body.appendChild(overlay);
-
-      const closeModal = () => overlay.remove();
-      document.getElementById("__userRolesClose").onclick = closeModal;
-   
-   
-      const userSearchInput = document.getElementById("__userRolesUserSearch");
-      const userSelect = document.getElementById("__userRolesUserSelect");
-      const submitBtn = document.getElementById("__userRolesSubmit");
-      const clearBtn = document.getElementById("__userRolesClear");
-      const statusBox = document.getElementById("__userRolesStatus");
-      const selectedUserBox = document.getElementById("__userRolesSelectedUser");
-      const rowsBox = document.getElementById("__userRolesRows");
-
-      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
-      const BASE_URL = `${clientUrl}/api/data/v9.2`;
-
-      let allUsers = [];
-
-      function escapeODataString(str) {
-        return String(str ?? "").replace(/'/g, "''");
-      }
-
-      async function fetchJSON(url, options = {}) {
-        const res = await fetch(url, {
-          ...options,
-          headers: {
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0",
-            "Accept": "application/json",
-            ...(options.headers || {})
-          },
-          credentials: "same-origin"
-        });
-
-        if (!res.ok) {
-          let message = `${res.status}`;
-          try {
-            const err = await res.json();
-            message = err?.error?.message || message;
-          } catch (_) {}
-          throw new Error(message);
-        }
-
-        return await res.json();
-      }
-
-      async function fetchAllPages(url) {
-        let all = [];
-        let nextUrl = url;
-
-        while (nextUrl) {
-          const data = await fetchJSON(nextUrl);
-          all = all.concat(data.value || []);
-          nextUrl = data["@odata.nextLink"] || null;
-        }
-
-        return all;
-      }
-
-      async function loadUsers() {
-        const users = await fetchAllPages(
-          `${BASE_URL}/systemusers?$select=systemuserid,fullname,domainname,isdisabled,internalemailaddress&$orderby=fullname asc`
-        );
-
-        allUsers = users.map(u => {
-          const domain = u.domainname || "";
-          const email = u.internalemailaddress || "";
-          const username = domain ? domain.replace(/@mac\\.org\\.il$/i, "") : "";
-
-          return {
-            id: u.systemuserid,
-            fullname: u.fullname || "",
-            domainname: domain,
-            internalemailaddress: email,
-            isdisabled: !!u.isdisabled,
-            username: username
-          };
-        });
-      }
-
-      function renderUsers(searchText = "") {
-        const q = searchText.trim().toLowerCase();
-        userSelect.innerHTML = "";
-
-        const filtered = allUsers.filter(u => {
-          if (!q) return true;
-          return (
-            (u.fullname || "").toLowerCase().includes(q) ||
-            (u.domainname || "").toLowerCase().includes(q) ||
-            (u.username || "").toLowerCase().includes(q) ||
-            (u.internalemailaddress || "").toLowerCase().includes(q)
-          );
-        });
-
-        for (const user of filtered) {
-          const option = document.createElement("option");
-          option.value = user.id;
-          option.textContent = `${user.fullname || "(ללא שם)"} | ${user.username || user.domainname || "ללא domain"} | ${user.isdisabled ? "לא פעיל" : "פעיל"}`;
-          option.dataset.userid = user.id;
-          option.dataset.fullname = user.fullname || "";
-          option.dataset.domainname = user.domainname || "";
-          option.dataset.email = user.internalemailaddress || "";
-          option.dataset.isdisabled = String(user.isdisabled);
-          userSelect.appendChild(option);
-        }
-
-        if (filtered.length > 0) userSelect.selectedIndex = 0;
-      }
-
-      async function getUserRoles(userId) {
-        const url =
-          `${BASE_URL}/systemusers(${userId})` +
-          `?$select=fullname,domainname,isdisabled` +
-          `&$expand=systemuserroles_association($select=roleid,name,_businessunitid_value)`;
-
-        const userData = await fetchJSON(url);
-
-        const roles = (userData.systemuserroles_association || []).map(r => ({
-          roleid: r.roleid,
-          name: r.name || "",
-          businessunitid: r._businessunitid_value || ""
-        }));
-
-        return {
-          user: {
-            fullname: userData.fullname || "",
-            domainname: userData.domainname || "",
-            isdisabled: !!userData.isdisabled
-          },
-          roles
-        };
-      }
-
-      async function loadBusinessUnitsMap() {
-        const businessUnits = await fetchAllPages(
-          `${BASE_URL}/businessunits?$select=businessunitid,name&$orderby=name asc`
-        );
-
-        const map = {};
-        for (const bu of businessUnits) {
-          map[bu.businessunitid] = bu.name || "";
-        }
-        return map;
-      }
-
-      function renderRolesRows(roles, businessUnitsMap) {
-        rowsBox.innerHTML = "";
-
-        if (!roles.length) {
-          const empty = document.createElement("div");
-          empty.style.cssText = "padding:14px;";
-          empty.textContent = "לא נמצאו תפקידי אבטחה למשתמש זה.";
-          rowsBox.appendChild(empty);
-          return;
-        }
-
-        const sortedRoles = [...roles].sort((a, b) => {
-          const nameCompare = (a.name || "").localeCompare((b.name || ""), "he");
-          if (nameCompare !== 0) return nameCompare;
-          return (businessUnitsMap[a.businessunitid] || "").localeCompare((businessUnitsMap[b.businessunitid] || ""), "he");
-        });
-
-        for (const role of sortedRoles) {
-          const row = document.createElement("div");
-          row.style.cssText = `
-            display:grid;
-            grid-template-columns: 1.6fr 1fr;
-            gap:0;
-            padding:12px;
-            border-bottom:1px solid #eee;
-            align-items:center;
-          `;
-
-          const roleNameCell = document.createElement("div");
-          roleNameCell.textContent = role.name || "";
-
-          const buCell = document.createElement("div");
-          buCell.textContent = businessUnitsMap[role.businessunitid] || role.businessunitid || "";
-
-          row.appendChild(roleNameCell);
-          row.appendChild(buCell);
-          rowsBox.appendChild(row);
-        }
-      }
-
-      try {
-        statusBox.textContent = "טוען את כל המשתמשים...";
-        await loadUsers();
-        renderUsers();
-        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים`;
-      } catch (err) {
-        statusBox.textContent = `❌ שגיאה בטעינה: ${err.message}`;
-        return;
-      }
-
-      userSearchInput.addEventListener("input", () => renderUsers(userSearchInput.value));
-
-      userSearchInput.addEventListener("keydown", (e) => {
-        if (e.key === "ArrowDown") {
-          userSelect.focus();
-          if (userSelect.options.length && userSelect.selectedIndex < 0) {
-            userSelect.selectedIndex = 0;
-          }
-        }
-      });
-
-      clearBtn.addEventListener("click", () => {
-        userSearchInput.value = "";
-        renderUsers("");
-        selectedUserBox.textContent = "לא נבחר משתמש";
-        rowsBox.innerHTML = "";
-        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים`;
-      });
-
-      submitBtn.addEventListener("click", async () => {
-        const selectedUser = userSelect.options[userSelect.selectedIndex];
-
-        if (!selectedUser) {
-          statusBox.textContent = "צריך לבחור משתמש מהרשימה.";
-          return;
-        }
-
-        const userId = selectedUser.dataset.userid;
-        const fullName = selectedUser.dataset.fullname || "";
-        const domainName = selectedUser.dataset.domainname || "";
-        const isDisabled = selectedUser.dataset.isdisabled === "true";
-
-        submitBtn.disabled = true;
-        statusBox.textContent = "טוען תפקידי אבטחה...";
-        rowsBox.innerHTML = "";
-        selectedUserBox.textContent = `משתמש נבחר: ${fullName} | ${domainName || "ללא domain"} | ${isDisabled ? "לא פעיל" : "פעיל"}`;
-
-        try {
-          const [result, businessUnitsMap] = await Promise.all([
-            getUserRoles(userId),
-            loadBusinessUnitsMap()
-          ]);
-
-          renderRolesRows(result.roles, businessUnitsMap);
-
-          statusBox.textContent =
-            `✅ נמצאו ${result.roles.length} תפקידי אבטחה עבור ${result.user.fullname}` +
-            (result.user.domainname ? ` (${result.user.domainname})` : "");
-        } catch (err) {
-          statusBox.textContent = `❌ שגיאה: ${err.message}`;
-        } finally {
-          submitBtn.disabled = false;
-        }
-      });
-    }
-  });
-});
-document.getElementById("removeSecurityRoleUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) return;
-
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: false },
-    world: "MAIN",
-    func: async () => {
-      document.getElementById("__d365helper_modal")?.remove();
-
-      const overlay = document.createElement("div");
-      overlay.id = "__d365helper_modal";
-      overlay.style.cssText = `
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,.35);
-        z-index: 2147483647;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-        direction: rtl;
-      `;
-
-      const modal = document.createElement("div");
-      modal.style.cssText = `
-        width: min(1200px, 96vw);
-        max-height: 92vh;
-        overflow: auto;
-        background: #fff;
-        border-radius: 16px;
-        box-shadow: 0 20px 60px rgba(0,0,0,.25);
-        padding: 20px;
-        font-family: Segoe UI, Arial, sans-serif;
-      `;
-
-      modal.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
-          <h2 style="margin:0;font-size:22px;">הסרת תפקיד אבטחה ממשתמש</h2>
-          <button id="__removeRoleClose" style="
-            border:none;
-            background:#f3f3f3;
-            border-radius:10px;
-            padding:8px 12px;
-            cursor:pointer;
-            font-size:16px;
-          ">✖</button>
-        </div>
-
-        <div style="display:grid;grid-template-columns:380px 1fr;gap:20px;align-items:start;">
-          <div>
-            <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש משתמש</label>
-            <input id="__removeRoleUserSearch" type="text" placeholder="חפש לפי שם / יוזר / מייל"
-              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
-
-            <select id="__removeRoleUserSelect" size="18"
-              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
-
-            <div style="display:flex;gap:10px;justify-content:flex-start;margin-top:14px;">
-              <button id="__removeRoleSubmit" style="
-                border:none;
-                background:#0f6cbd;
-                color:white;
-                border-radius:10px;
-                padding:10px 18px;
-                cursor:pointer;
-                font-size:15px;
-              ">הצג תפקידים</button>
-
-              <button id="__removeRoleClear" style="
-                border:none;
-                background:#eaeaea;
-                color:#222;
-                border-radius:10px;
-                padding:10px 18px;
-                cursor:pointer;
-                font-size:15px;
-              ">נקה</button>
-            </div>
-          </div>
-
-          <div>
-            <div id="__removeRoleSelectedUser" style="
-              margin-bottom:12px;
-              padding:10px 12px;
-              background:#f7f7f7;
-              border-radius:10px;
-              min-height:20px;
-              font-weight:600;
-            ">לא נבחר משתמש</div>
-
-            <div id="__removeRoleResults" style="
-              border:1px solid #ddd;
-              border-radius:12px;
-              overflow:hidden;
-              background:#fff;
-            ">
-              <div style="
-                display:grid;
-                grid-template-columns: 1.5fr 1fr 140px;
-                gap:0;
-                background:#f3f3f3;
-                font-weight:700;
-                padding:12px;
-                border-bottom:1px solid #ddd;
-              ">
-                <div>תפקיד אבטחה</div>
-                <div>יחידה עסקית</div>
-                <div>פעולה</div>
-              </div>
-
-              <div id="__removeRoleRows" style="max-height:520px;overflow:auto;"></div>
-            </div>
-          </div>
-        </div>
-
-        <div id="__removeRoleStatus" style="
-          margin-top:14px;
-          padding:10px 12px;
-          background:#f7f7f7;
-          border-radius:10px;
-          min-height:22px;
-          white-space:pre-wrap;
-          font-size:14px;
-        "></div>
-      `;
-
-      overlay.appendChild(modal);
-      document.body.appendChild(overlay);
-
-      const closeModal = () => overlay.remove();
-      document.getElementById("__removeRoleClose").onclick = closeModal;
-
-      const userSearchInput = document.getElementById("__removeRoleUserSearch");
-      const userSelect = document.getElementById("__removeRoleUserSelect");
-      const submitBtn = document.getElementById("__removeRoleSubmit");
-      const clearBtn = document.getElementById("__removeRoleClear");
-      const statusBox = document.getElementById("__removeRoleStatus");
-      const selectedUserBox = document.getElementById("__removeRoleSelectedUser");
-      const rowsBox = document.getElementById("__removeRoleRows");
-
-      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
-      const BASE_URL = `${clientUrl}/api/data/v9.2`;
-
-      let allUsers = [];
-      let businessUnitsMap = {};
-      let currentSelectedUserId = null;
-
-      async function fetchJSON(url, options = {}) {
-        const res = await fetch(url, {
-          ...options,
-          headers: {
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0",
-            "Accept": "application/json",
-            ...(options.headers || {})
-          },
-          credentials: "same-origin"
-        });
-
-        if (!res.ok) {
-          let message = `${res.status}`;
-          try {
-            const err = await res.json();
-            message = err?.error?.message || message;
-          } catch (_) {}
-          throw new Error(message);
-        }
-
-        if (res.status === 204) return null;
-        return await res.json();
-      }
-
-      async function fetchAllPages(url) {
-        let all = [];
-        let nextUrl = url;
-
-        while (nextUrl) {
-          const data = await fetchJSON(nextUrl);
-          all = all.concat(data?.value || []);
-          nextUrl = data?.["@odata.nextLink"] || null;
-        }
-
-        return all;
-      }
-
-      async function loadUsers() {
-        const users = await fetchAllPages(
-          `${BASE_URL}/systemusers?$select=systemuserid,fullname,domainname,isdisabled,internalemailaddress&$orderby=fullname asc`
-        );
-
-        allUsers = users.map(u => {
-          const domain = u.domainname || "";
-          const email = u.internalemailaddress || "";
-          const username = domain ? domain.replace(/@mac\\.org\\.il$/i, "") : "";
-
-          return {
-            id: u.systemuserid,
-            fullname: u.fullname || "",
-            domainname: domain,
-            internalemailaddress: email,
-            isdisabled: !!u.isdisabled,
-            username
-          };
-        });
-      }
-
-      async function loadBusinessUnitsMap() {
-        const businessUnits = await fetchAllPages(
-          `${BASE_URL}/businessunits?$select=businessunitid,name&$orderby=name asc`
-        );
-
-        const map = {};
-        for (const bu of businessUnits) {
-          map[bu.businessunitid] = bu.name || "";
-        }
-        businessUnitsMap = map;
-      }
-
-      function renderUsers(searchText = "") {
-        const q = searchText.trim().toLowerCase();
-        userSelect.innerHTML = "";
-
-        const filtered = allUsers.filter(u => {
-          if (!q) return true;
-          return (
-            (u.fullname || "").toLowerCase().includes(q) ||
-            (u.domainname || "").toLowerCase().includes(q) ||
-            (u.username || "").toLowerCase().includes(q) ||
-            (u.internalemailaddress || "").toLowerCase().includes(q)
-          );
-        });
-
-        for (const user of filtered) {
-          const option = document.createElement("option");
-          option.value = user.id;
-          option.textContent = `${user.fullname || "(ללא שם)"} | ${user.username || user.domainname || "ללא domain"} | ${user.isdisabled ? "לא פעיל" : "פעיל"}`;
-          option.dataset.userid = user.id;
-          option.dataset.fullname = user.fullname || "";
-          option.dataset.domainname = user.domainname || "";
-          option.dataset.email = user.internalemailaddress || "";
-          option.dataset.isdisabled = String(user.isdisabled);
-          userSelect.appendChild(option);
-        }
-
-        if (filtered.length > 0) userSelect.selectedIndex = 0;
-      }
-
-      async function getUserRoles(userId) {
-        const url =
-          `${BASE_URL}/systemusers(${userId})` +
-          `?$select=fullname,domainname,isdisabled` +
-          `&$expand=systemuserroles_association($select=roleid,name,_businessunitid_value)`;
-
-        const userData = await fetchJSON(url);
-
-        const roles = (userData.systemuserroles_association || []).map(r => ({
-          roleid: r.roleid,
-          name: r.name || "",
-          businessunitid: r._businessunitid_value || ""
-        }));
-
-        return {
-          user: {
-            fullname: userData.fullname || "",
-            domainname: userData.domainname || "",
-            isdisabled: !!userData.isdisabled
-          },
-          roles
-        };
-      }
-
-      async function removeUserRole(userId, roleId) {
-        const url = `${BASE_URL}/systemusers(${userId})/systemuserroles_association(${roleId})/$ref`;
-
-        await fetchJSON(url, {
-          method: "DELETE",
-          headers: {
-            "If-Match": "*"
-          }
-        });
-      }
-
-      async function refreshRoles(userId, userLabel) {
-        rowsBox.innerHTML = "";
-        statusBox.textContent = "טוען תפקידי אבטחה...";
-
-        const result = await getUserRoles(userId);
-        renderRolesRows(result.roles, businessUnitsMap, userId);
-
-        statusBox.textContent =
-          `✅ נמצאו ${result.roles.length} תפקידי אבטחה עבור ${result.user.fullname}` +
-          (result.user.domainname ? ` (${result.user.domainname})` : "");
-
-        if (userLabel) {
-          selectedUserBox.textContent = userLabel;
-        }
-      }
-
-      function renderRolesRows(roles, businessUnitsMap, userId) {
-        rowsBox.innerHTML = "";
-
-        if (!roles.length) {
-          const empty = document.createElement("div");
-          empty.style.cssText = "padding:14px;";
-          empty.textContent = "לא נמצאו תפקידי אבטחה למשתמש זה.";
-          rowsBox.appendChild(empty);
-          return;
-        }
-
-        const sortedRoles = [...roles].sort((a, b) => {
-          const nameCompare = (a.name || "").localeCompare((b.name || ""), "he");
-          if (nameCompare !== 0) return nameCompare;
-          return (businessUnitsMap[a.businessunitid] || "").localeCompare((businessUnitsMap[b.businessunitid] || ""), "he");
-        });
-
-        for (const role of sortedRoles) {
-          const row = document.createElement("div");
-          row.style.cssText = `
-            display:grid;
-            grid-template-columns: 1.5fr 1fr 140px;
-            gap:0;
-            padding:12px;
-            border-bottom:1px solid #eee;
-            align-items:center;
-          `;
-
-          const roleNameCell = document.createElement("div");
-          roleNameCell.textContent = role.name || "";
-
-          const buCell = document.createElement("div");
-          buCell.textContent = businessUnitsMap[role.businessunitid] || role.businessunitid || "";
-
-          const actionCell = document.createElement("div");
-          const removeBtn = document.createElement("button");
-          removeBtn.textContent = "הסר";
-          removeBtn.style.cssText = `
-            border:none;
-            background:#d13438;
-            color:white;
-            border-radius:8px;
-            padding:8px 12px;
-            cursor:pointer;
-            font-size:14px;
-          `;
-
-          removeBtn.addEventListener("click", async () => {
-            const confirmed = confirm(`להסיר את התפקיד "${role.name}" מהמשתמש?`);
-            if (!confirmed) return;
-
-            removeBtn.disabled = true;
-            statusBox.textContent = `מסיר את התפקיד "${role.name}"...`;
-
-            try {
-              await removeUserRole(userId, role.roleid);
-              statusBox.textContent = `✅ התפקיד "${role.name}" הוסר בהצלחה`;
-              await refreshRoles(currentSelectedUserId, selectedUserBox.textContent);
-            } catch (err) {
-              statusBox.textContent = `❌ שגיאה בהסרה: ${err.message}`;
-            } finally {
-              removeBtn.disabled = false;
-            }
-          });
-
-          actionCell.appendChild(removeBtn);
-
-          row.appendChild(roleNameCell);
-          row.appendChild(buCell);
-          row.appendChild(actionCell);
-
-          rowsBox.appendChild(row);
-        }
-      }
-
-      try {
-        statusBox.textContent = "טוען נתונים...";
-        await Promise.all([loadUsers(), loadBusinessUnitsMap()]);
-        renderUsers();
-        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים`;
-      } catch (err) {
-        statusBox.textContent = `❌ שגיאה בטעינה: ${err.message}`;
-        return;
-      }
-
-      userSearchInput.addEventListener("input", () => renderUsers(userSearchInput.value));
-
-      clearBtn.addEventListener("click", () => {
-        userSearchInput.value = "";
-        renderUsers("");
-        currentSelectedUserId = null;
-        selectedUserBox.textContent = "לא נבחר משתמש";
-        rowsBox.innerHTML = "";
-        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים`;
-      });
-
-      submitBtn.addEventListener("click", async () => {
-        const selectedUser = userSelect.options[userSelect.selectedIndex];
-
-        if (!selectedUser) {
-          statusBox.textContent = "צריך לבחור משתמש מהרשימה.";
-          return;
-        }
-
-        const userId = selectedUser.dataset.userid;
-        const fullName = selectedUser.dataset.fullname || "";
-        const domainName = selectedUser.dataset.domainname || "";
-        const isDisabled = selectedUser.dataset.isdisabled === "true";
-
-        currentSelectedUserId = userId;
-        const userLabel = `משתמש נבחר: ${fullName} | ${domainName || "ללא domain"} | ${isDisabled ? "לא פעיל" : "פעיל"}`;
-
-        submitBtn.disabled = true;
-        selectedUserBox.textContent = userLabel;
-        rowsBox.innerHTML = "";
-        statusBox.textContent = "טוען תפקידי אבטחה...";
-
-        try {
-          await refreshRoles(userId, userLabel);
-        } catch (err) {
-          statusBox.textContent = `❌ שגיאה: ${err.message}`;
-        } finally {
-          submitBtn.disabled = false;
-        }
-      });
-    }
-  });
-});
-
-
-document.getElementById("quickUpdateFieldUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) return;
-
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: false },
-    world: "MAIN",
-    func: async () => {
-      document.getElementById("__d365helper_modal")?.remove();
-
-      const overlay = document.createElement("div");
-      overlay.id = "__d365helper_modal";
-      overlay.style.cssText = `
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,.35);
-        z-index: 2147483647;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-        direction: ltr;
-      `;
-
-      const modal = document.createElement("div");
-      modal.style.cssText = `
-        width: min(1200px, 96vw);
-        max-height: 92vh;
-        overflow: auto;
-        background: #fff;
-        border-radius: 16px;
-        box-shadow: 0 20px 60px rgba(0,0,0,.25);
-        padding: 20px;
-        font-family: Segoe UI, Arial, sans-serif;
-      `;
-
-      modal.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
-          <h2 style="margin:0;font-size:22px;">Quick Update Field</h2>
-          <button id="__quickUpdateClose" style="
-            border:none;
-            background:#f3f3f3;
-            border-radius:10px;
-            padding:8px 12px;
-            cursor:pointer;
-            font-size:16px;
-          ">✖</button>
-        </div>
-
-        <div style="display:grid;grid-template-columns: 440px 1fr; gap:20px; align-items:start;">
-          <div>
-            <label style="display:block;font-weight:600;margin-bottom:6px;">Entity logical name</label>
-            <input id="__quickUpdateEntity" type="text" placeholder="e.g. account"
-              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;" />
-
-            <label style="display:block;font-weight:600;margin-bottom:6px;">Record GUID</label>
-            <input id="__quickUpdateId" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;" />
-
-            <label style="display:block;font-weight:600;margin-bottom:6px;">Field logical name</label>
-            <input id="__quickUpdateField" type="text" placeholder="e.g. name / ey_xxx / ownerid"
-              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;" />
-
-            <label style="display:block;font-weight:600;margin-bottom:6px;">Field type</label>
-            <select id="__quickUpdateType"
-              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;">
-              <option value="string">String</option>
-              <option value="memo">Memo</option>
-              <option value="integer">Whole Number</option>
-              <option value="decimal">Decimal</option>
-              <option value="double">Double</option>
-              <option value="boolean">Two Options</option>
-              <option value="datetime">Date Time</option>
-              <option value="optionset">Option Set (integer)</option>
-              <option value="lookup">Lookup (@odata.bind)</option>
-            </select>
-
-            <label style="display:block;font-weight:600;margin-bottom:6px;">New value</label>
-            <textarea id="__quickUpdateValue" spellcheck="false"
-              style="width:100%;min-height:120px;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;resize:vertical;"
-              placeholder="Enter new value"></textarea>
-
-            <div id="__quickUpdateLookupHelp" style="
-              display:none;
-              margin-bottom:12px;
-              padding:12px;
-              background:#f7f7f7;
-              border-radius:10px;
-              font-size:13px;
-              line-height:1.5;
-              white-space:pre-wrap;
-              color:#444;
-            ">For lookup use JSON:
-{
-  "entitySetName": "systemusers",
-  "id": "GUID"
-}</div>
-
-            <div style="display:flex;gap:10px;flex-wrap:wrap;">
-              <button id="__quickUpdateLoadCurrent" style="
-                border:none;
-                background:#0f6cbd;
-                color:white;
-                border-radius:10px;
-                padding:10px 16px;
-                cursor:pointer;
-                font-size:14px;
-              ">Load Current Value</button>
-
-              <button id="__quickUpdateSubmit" style="
-                border:none;
-                background:#107c10;
-                color:white;
-                border-radius:10px;
-                padding:10px 16px;
-                cursor:pointer;
-                font-size:14px;
-              ">Update</button>
-
-              <button id="__quickUpdateClear" style="
-                border:none;
-                background:#eaeaea;
-                color:#222;
-                border-radius:10px;
-                padding:10px 16px;
-                cursor:pointer;
-                font-size:14px;
-              ">Clear</button>
-            </div>
-          </div>
-
-          <div>
-            <div style="
-              border:1px solid #ddd;
-              border-radius:12px;
-              overflow:hidden;
-              background:#fff;
-              margin-bottom:14px;
-            ">
-              <div style="
-                background:#f3f3f3;
-                font-weight:700;
-                padding:12px;
-                border-bottom:1px solid #ddd;
-              ">Current Value</div>
-              <div id="__quickUpdateCurrentValue" style="
-                padding:14px;
-                min-height:120px;
-                white-space:pre-wrap;
-                word-break:break-word;
-                font-family:Consolas, monospace;
-                font-size:13px;
-              ">Not loaded</div>
-            </div>
-
-            <div style="
-              border:1px solid #ddd;
-              border-radius:12px;
-              overflow:hidden;
-              background:#fff;
-              margin-bottom:14px;
-            ">
-              <div style="
-                background:#f3f3f3;
-                font-weight:700;
-                padding:12px;
-                border-bottom:1px solid #ddd;
-              ">Payload Preview</div>
-              <div id="__quickUpdatePayloadPreview" style="
-                padding:14px;
-                min-height:120px;
-                white-space:pre-wrap;
-                word-break:break-word;
-                font-family:Consolas, monospace;
-                font-size:13px;
-              ">{}</div>
-            </div>
-
-            <div style="
-              border:1px solid #ddd;
-              border-radius:12px;
-              overflow:hidden;
-              background:#fff;
-            ">
-              <div style="
-                background:#f3f3f3;
-                font-weight:700;
-                padding:12px;
-                border-bottom:1px solid #ddd;
-              ">Status</div>
-              <div id="__quickUpdateStatus" style="
-                padding:14px;
-                min-height:80px;
-                white-space:pre-wrap;
-                font-size:14px;
-              ">Ready</div>
-            </div>
-          </div>
-        </div>
-      `;
-
-      overlay.appendChild(modal);
-      document.body.appendChild(overlay);
-
-      const closeModal = () => overlay.remove();
-      document.getElementById("__quickUpdateClose").onclick = closeModal;
-
-      const entityInput = document.getElementById("__quickUpdateEntity");
-      const idInput = document.getElementById("__quickUpdateId");
-      const fieldInput = document.getElementById("__quickUpdateField");
-      const typeSelect = document.getElementById("__quickUpdateType");
-      const valueInput = document.getElementById("__quickUpdateValue");
-      const lookupHelp = document.getElementById("__quickUpdateLookupHelp");
-      const loadCurrentBtn = document.getElementById("__quickUpdateLoadCurrent");
-      const submitBtn = document.getElementById("__quickUpdateSubmit");
-      const clearBtn = document.getElementById("__quickUpdateClear");
-      const currentValueBox = document.getElementById("__quickUpdateCurrentValue");
-      const payloadPreviewBox = document.getElementById("__quickUpdatePayloadPreview");
-      const statusBox = document.getElementById("__quickUpdateStatus");
-
-      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
-      const BASE_URL = `${clientUrl}/api/data/v9.2`;
-
-      function normalizeGuid(value) {
-        return String(value || "").replace(/[{}]/g, "").trim();
-      }
-
-      function isGuid(value) {
-        return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
-      }
-
-      async function fetchJSON(url, options = {}) {
-        const res = await fetch(url, {
-          ...options,
-          headers: {
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0",
-            "Accept": "application/json;odata.include-annotations=*",
-            "Content-Type": "application/json; charset=utf-8",
-            ...(options.headers || {})
-          },
-          credentials: "same-origin"
-        });
-
-        if (!res.ok) {
-          let message = `${res.status}`;
-          try {
-            const err = await res.json();
-            message = err?.error?.message || message;
-          } catch (_) {}
-          throw new Error(message);
-        }
-
-        if (res.status === 204) return null;
-        return await res.json();
-      }
-
-      async function getEntitySetName(logicalName) {
-        const url =
-          `${BASE_URL}/EntityDefinitions(LogicalName='${logicalName}')?$select=EntitySetName`;
-
-        const data = await fetchJSON(url);
-        if (!data || !data.EntitySetName) {
-          throw new Error(`EntitySetName not found for '${logicalName}'`);
-        }
-
-        return data.EntitySetName;
-      }
-
-      function tryGetCurrentRecordContext() {
-        try {
-          if (window.Xrm?.Page?.data?.entity) {
-            const entityName = Xrm.Page.data.entity.getEntityName?.();
-            const id = normalizeGuid(Xrm.Page.data.entity.getId?.());
-            return { entityName, id };
-          }
-        } catch (_) {}
-
-        try {
-          const pageEntity = window.parent?.Xrm?.Page?.data?.entity;
-          if (pageEntity) {
-            const entityName = pageEntity.getEntityName?.();
-            const id = normalizeGuid(pageEntity.getId?.());
-            return { entityName, id };
-          }
-        } catch (_) {}
-
-        return null;
-      }
-
-      function updateLookupHelpVisibility() {
-        lookupHelp.style.display = typeSelect.value === "lookup" ? "block" : "none";
-      }
-
-      function parseInputValue(type, rawValue, fieldName) {
-        const value = rawValue ?? "";
-
-        switch (type) {
-          case "string":
-          case "memo":
-            return { [fieldName]: String(value) };
-
-          case "integer": {
-            if (String(value).trim() === "") throw new Error("Integer value is required");
-            const parsed = parseInt(value, 10);
-            if (Number.isNaN(parsed)) throw new Error("Invalid integer value");
-            return { [fieldName]: parsed };
-          }
-
-          case "decimal":
-          case "double": {
-            if (String(value).trim() === "") throw new Error("Numeric value is required");
-            const parsed = Number(value);
-            if (Number.isNaN(parsed)) throw new Error("Invalid numeric value");
-            return { [fieldName]: parsed };
-          }
-
-          case "boolean": {
-            const normalized = String(value).trim().toLowerCase();
-            if (["true", "1", "yes"].includes(normalized)) return { [fieldName]: true };
-            if (["false", "0", "no"].includes(normalized)) return { [fieldName]: false };
-            throw new Error("Boolean must be true/false or 1/0");
-          }
-
-          case "datetime": {
-            if (String(value).trim() === "") throw new Error("Datetime value is required");
-            const dt = new Date(value);
-            if (isNaN(dt.getTime())) throw new Error("Invalid datetime value");
-            return { [fieldName]: dt.toISOString() };
-          }
-
-          case "optionset": {
-            if (String(value).trim() === "") throw new Error("Option Set integer value is required");
-            const parsed = parseInt(value, 10);
-            if (Number.isNaN(parsed)) throw new Error("Invalid Option Set value");
-            return { [fieldName]: parsed };
-          }
-
-          case "lookup": {
-            let parsed;
-            try {
-              parsed = JSON.parse(value);
-            } catch (_) {
-              throw new Error('Lookup value must be JSON like {"entitySetName":"systemusers","id":"GUID"}');
-            }
-
-            const entitySetName = String(parsed.entitySetName || "").trim();
-            const id = normalizeGuid(parsed.id || "");
-
-            if (!entitySetName) throw new Error("Lookup JSON missing entitySetName");
-            if (!isGuid(id)) throw new Error("Lookup JSON contains invalid GUID");
-
-            return {
-              [`${fieldName}@odata.bind`]: `/${entitySetName}(${id})`
-            };
-          }
-
-          default:
-            throw new Error(`Unsupported field type: ${type}`);
-        }
-      }
-
-      function refreshPayloadPreview() {
-          try {
-            const fieldName = fieldInput.value.trim();
-            const type = typeSelect.value;
-            const rawValue = valueInput.value;
-
-            if (!fieldName) {
-              payloadPreviewBox.textContent = "{}";
-              return;
-            }
-
-            if (String(rawValue).trim() === "") {
-              payloadPreviewBox.textContent = "{}";
-              return;
-            }
-
-            const payload = parseInputValue(type, rawValue, fieldName);
-            payloadPreviewBox.textContent = JSON.stringify(payload, null, 2);
-          } catch (err) {
-            payloadPreviewBox.textContent = `Invalid payload: ${err.message}`;
-          }
-        }
-async function getLookupTargetEntity(entityLogicalName, fieldName) {
-  const url =
-    `${BASE_URL}/EntityDefinitions(LogicalName='${entityLogicalName}')` +
-    `/Attributes(LogicalName='${fieldName}')/Microsoft.Dynamics.CRM.LookupAttributeMetadata` +
-    `?$select=LogicalName,Targets`;
-
-  const data = await fetchJSON(url);
-
-  if (Array.isArray(data?.Targets) && data.Targets.length > 0) {
-    return data.Targets[0];
-  }
-
-  return null;
-}
-     async function loadCurrentValue() {
-  const entityLogicalName = entityInput.value.trim();
-  const recordId = normalizeGuid(idInput.value);
-  const fieldName = fieldInput.value.trim();
-  const fieldType = typeSelect.value;
-
-  if (!entityLogicalName) throw new Error("Entity logical name is required");
-  if (!fieldName) throw new Error("Field logical name is required");
-  if (!isGuid(recordId)) throw new Error("Valid GUID is required");
-
-  const entitySetName = await getEntitySetName(entityLogicalName);
-
-  let selectFieldName = fieldName;
-  let responseFieldName = fieldName;
-
-  if (fieldType === "lookup") {
-    selectFieldName = `_${fieldName}_value`;
-    responseFieldName = selectFieldName;
-  }
-
-  const url =
-    `${BASE_URL}/${entitySetName}(${recordId})?$select=${encodeURIComponent(selectFieldName)}`;
-
-  const data = await fetchJSON(url);
-
-  const raw = data[responseFieldName] ?? null;
-  const formatted =
-    data[`${responseFieldName}@OData.Community.Display.V1.FormattedValue`] ?? null;
-
-  const result = {
-    raw,
-    formatted
-  };
-
-  if (fieldType === "lookup") {
-    let logicalName =
-      data[`${responseFieldName}@Microsoft.Dynamics.CRM.lookuplogicalname`] ?? null;
-
-    if (!logicalName) {
-      try {
-        logicalName = await getLookupTargetEntity(entityLogicalName, fieldName);
-      } catch (_) {}
-    }
-
-    result.logicalName = logicalName ?? null;
-
-    if (raw && logicalName) {
-  try {
-    const lookupEntitySetName = await getEntitySetName(logicalName);
-
-    valueInput.value = JSON.stringify({
-      entitySetName: lookupEntitySetName,
-      id: raw
-    }, null, 2);
-
-    // 🔥 זה החדש — להביא שם
-    const name = await getLookupFormattedValue(logicalName, raw);
-
-    result.formatted = name;
-  } catch (_) {}
-}
-  }
-
-  currentValueBox.textContent = JSON.stringify(result, null, 2);
-  refreshPayloadPreview();
-}
-async function getLookupFormattedValue(entityLogicalName, id) {
-  const entitySetName = await getEntitySetName(entityLogicalName);
-  const primaryName = await getPrimaryNameField(entityLogicalName);
-
-  const url =
-    `${BASE_URL}/${entitySetName}(${id})?$select=${primaryName}`;
-
-  const data = await fetchJSON(url);
-
-  return data[primaryName] ?? null;
-}
-async function getPrimaryNameField(entityLogicalName) {
-  const url =
-    `${BASE_URL}/EntityDefinitions(LogicalName='${entityLogicalName}')?$select=PrimaryNameAttribute`;
-
-  const data = await fetchJSON(url);
-  return data.PrimaryNameAttribute;
-}
-      async function submitUpdate() {
-        const entityLogicalName = entityInput.value.trim();
-        const recordId = normalizeGuid(idInput.value);
-        const fieldName = fieldInput.value.trim();
-        const type = typeSelect.value;
-        const rawValue = valueInput.value;
-
-        if (!entityLogicalName) throw new Error("Entity logical name is required");
-        if (!fieldName) throw new Error("Field logical name is required");
-        if (!isGuid(recordId)) throw new Error("Valid GUID is required");
-
-        const payload = parseInputValue(type, rawValue, fieldName);
-        const entitySetName = await getEntitySetName(entityLogicalName);
-        const url = `${BASE_URL}/${entitySetName}(${recordId})`;
-
-        await fetchJSON(url, {
-          method: "PATCH",
-          body: JSON.stringify(payload),
-          headers: {
-            "If-Match": "*"
-          }
-        });
-
-        payloadPreviewBox.textContent = JSON.stringify(payload, null, 2);
-      }
-
-      function clearForm() {
-        const detected = tryGetCurrentRecordContext();
-
-        fieldInput.value = "";
-        typeSelect.value = "string";
-        valueInput.value = "";
-        currentValueBox.textContent = "Not loaded";
-        payloadPreviewBox.textContent = "{}";
-        statusBox.textContent = "Ready";
-
-        if (detected?.entityName) entityInput.value = detected.entityName;
-        if (detected?.id) idInput.value = detected.id;
-
-        updateLookupHelpVisibility();
-        refreshPayloadPreview();
-      }
-
-      const detectedContext = tryGetCurrentRecordContext();
-      if (detectedContext?.entityName) entityInput.value = detectedContext.entityName;
-      if (detectedContext?.id) idInput.value = detectedContext.id;
-
-      updateLookupHelpVisibility();
-      refreshPayloadPreview();
-
-      typeSelect.addEventListener("change", () => {
-        updateLookupHelpVisibility();
-        refreshPayloadPreview();
-      });
-
-      fieldInput.addEventListener("input", refreshPayloadPreview);
-      valueInput.addEventListener("input", refreshPayloadPreview);
-
-      loadCurrentBtn.addEventListener("click", async () => {
-        loadCurrentBtn.disabled = true;
-        statusBox.textContent = "Loading current value...";
-
-        try {
-          await loadCurrentValue();
-          statusBox.textContent = "✅ Current value loaded";
-        } catch (err) {
-          statusBox.textContent = `❌ ${err.message}`;
-        } finally {
-          loadCurrentBtn.disabled = false;
-        }
-      });
-
-      submitBtn.addEventListener("click", async () => {
-        submitBtn.disabled = true;
-        statusBox.textContent = "Updating...";
-
-        try {
-          await submitUpdate();
-          statusBox.textContent = "✅ Record updated successfully";
-
-          try {
-            await loadCurrentValue();
-          } catch (_) {}
-        } catch (err) {
-          statusBox.textContent = `❌ ${err.message}`;
-        } finally {
-          submitBtn.disabled = false;
-        }
-      });
-
-      clearBtn.addEventListener("click", clearForm);
-    }
-  });
-});
 
 
 
@@ -6095,6 +4209,1084 @@ const res = await fetch(absoluteUrl, {
       if (ctx?.entityLogicalName && ctx?.id) {
         statusBox.textContent = `Ready\nCurrent record: ${ctx.entityLogicalName} (${ctx.id})`;
       }
+    }
+  });
+});
+document.getElementById("securityRolesUi").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: async () => {
+      document.getElementById("__d365helper_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.35);
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        direction: rtl;
+      `;
+
+      const modal = document.createElement("div");
+      modal.style.cssText = `
+        width: min(1200px, 96vw);
+        max-height: 92vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,.25);
+        padding: 20px;
+        font-family: Segoe UI, Arial, sans-serif;
+      `;
+
+      modal.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
+          <h2 style="margin:0;font-size:22px;">ניהול תפקידי אבטחה למשתמש</h2>
+          <button id="__rolesClose" style="border:none;background:#f3f3f3;border-radius:10px;padding:8px 12px;cursor:pointer;font-size:16px;">✖</button>
+        </div>
+
+        <div style="margin-bottom:14px;padding:10px 12px;background:#f7f7f7;border-radius:10px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
+            <input id="__rolesUseCurrentUser" type="checkbox" />
+            בצע עליי - המשתמש המחובר
+          </label>
+        </div>
+
+        <div style="display:grid;grid-template-columns:380px 1fr;gap:20px;align-items:start;">
+          <div>
+            <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש משתמש</label>
+            <input id="__rolesUserSearch" type="text" placeholder="חפש לפי שם / יוזר / מייל"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
+
+            <select id="__rolesUserSelect" size="15"
+              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
+
+            <label style="display:block;font-weight:600;margin:16px 0 8px;">חיפוש תפקיד להוספה</label>
+            <input id="__rolesRoleSearch" type="text" placeholder="חפש תפקיד"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
+
+            <select id="__rolesRoleSelect" size="8"
+              style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+              <button id="__rolesShow" style="border:none;background:#0f6cbd;color:white;border-radius:10px;padding:10px 16px;cursor:pointer;font-size:14px;">הצג תפקידים</button>
+              <button id="__rolesAdd" style="border:none;background:#107c10;color:white;border-radius:10px;padding:10px 16px;cursor:pointer;font-size:14px;">הוסף תפקיד</button>
+              <button id="__rolesClear" style="border:none;background:#eaeaea;color:#222;border-radius:10px;padding:10px 16px;cursor:pointer;font-size:14px;">נקה</button>
+            </div>
+          </div>
+
+          <div>
+            <div id="__rolesSelectedUser" style="margin-bottom:12px;padding:10px 12px;background:#f7f7f7;border-radius:10px;min-height:20px;font-weight:600;">
+              לא נבחר משתמש
+            </div>
+
+            <div style="border:1px solid #ddd;border-radius:12px;overflow:hidden;background:#fff;">
+              <div style="display:grid;grid-template-columns:1.5fr 1fr 140px;background:#f3f3f3;font-weight:700;padding:12px;border-bottom:1px solid #ddd;">
+                <div>תפקיד אבטחה</div>
+                <div>יחידה עסקית</div>
+                <div>פעולה</div>
+              </div>
+
+              <div id="__rolesRows" style="max-height:560px;overflow:auto;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="__rolesStatus" style="margin-top:14px;padding:10px 12px;background:#f7f7f7;border-radius:10px;min-height:22px;white-space:pre-wrap;font-size:14px;"></div>
+      `;
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      const closeModal = () => overlay.remove();
+      document.getElementById("__rolesClose").onclick = closeModal;
+
+      const userSearchInput = document.getElementById("__rolesUserSearch");
+      const userSelect = document.getElementById("__rolesUserSelect");
+      const roleSearchInput = document.getElementById("__rolesRoleSearch");
+      const roleSelect = document.getElementById("__rolesRoleSelect");
+      const showBtn = document.getElementById("__rolesShow");
+      const addBtn = document.getElementById("__rolesAdd");
+      const clearBtn = document.getElementById("__rolesClear");
+      const statusBox = document.getElementById("__rolesStatus");
+      const selectedUserBox = document.getElementById("__rolesSelectedUser");
+      const rowsBox = document.getElementById("__rolesRows");
+      const useCurrentUserCheckbox = document.getElementById("__rolesUseCurrentUser");
+
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+      const BASE_URL = `${clientUrl}/api/data/v9.2`;
+
+      let allUsers = [];
+      let allRoles = [];
+      let businessUnitsMap = {};
+      let currentSelectedUserId = null;
+
+      function normalizeGuid(id) {
+        return String(id || "").replace(/[{}]/g, "").trim();
+      }
+
+      function escapeODataString(str) {
+        return String(str ?? "").replace(/'/g, "''");
+      }
+
+      async function fetchJSON(url, options = {}) {
+        const res = await fetch(url, {
+          ...options,
+          headers: {
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Accept": "application/json",
+            ...(options.headers || {})
+          },
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) {
+          let message = `${res.status}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        if (res.status === 204) return null;
+        return await res.json();
+      }
+
+      async function fetchAllPages(url) {
+        let all = [];
+        let nextUrl = url;
+
+        while (nextUrl) {
+          const data = await fetchJSON(nextUrl);
+          all = all.concat(data?.value || []);
+          nextUrl = data?.["@odata.nextLink"] || null;
+        }
+
+        return all;
+      }
+
+      async function loadUsers() {
+        const users = await fetchAllPages(
+          `${BASE_URL}/systemusers?$select=systemuserid,fullname,domainname,isdisabled,internalemailaddress&$orderby=fullname asc`
+        );
+
+        allUsers = users.map(u => {
+          const domain = u.domainname || "";
+          const username = domain ? domain.replace(/@mac\\.org\\.il$/i, "") : "";
+
+          return {
+            id: u.systemuserid,
+            fullname: u.fullname || "",
+            domainname: domain,
+            internalemailaddress: u.internalemailaddress || "",
+            isdisabled: !!u.isdisabled,
+            username
+          };
+        });
+      }
+
+      async function loadBusinessUnitsMap() {
+        const businessUnits = await fetchAllPages(
+          `${BASE_URL}/businessunits?$select=businessunitid,name,_parentbusinessunitid_value&$orderby=name asc`
+        );
+
+        businessUnitsMap = {};
+        for (const bu of businessUnits) {
+          businessUnitsMap[bu.businessunitid] = bu.name || "";
+        }
+
+        return businessUnits;
+      }
+
+      async function loadRoles() {
+        const businessUnits = await loadBusinessUnitsMap();
+        const rootBusinessUnit = businessUnits.find(bu => !bu._parentbusinessunitid_value);
+
+        if (!rootBusinessUnit) {
+          throw new Error("לא נמצאה יחידה עסקית ראשית");
+        }
+
+        const roles = await fetchAllPages(
+          `${BASE_URL}/roles?$select=roleid,name,_businessunitid_value&$orderby=name asc`
+        );
+
+        allRoles = roles
+          .filter(r => r.name && r._businessunitid_value === rootBusinessUnit.businessunitid)
+          .sort((a, b) => (a.name || "").localeCompare(b.name || "", "he"))
+          .map(r => ({
+            id: r.roleid,
+            name: r.name || "",
+            businessunitid: r._businessunitid_value || ""
+          }));
+      }
+
+      function getCurrentUserId() {
+        return normalizeGuid(Xrm.Utility.getGlobalContext().userSettings.userId);
+      }
+
+      function getSelectedUserId() {
+        if (useCurrentUserCheckbox.checked) return getCurrentUserId();
+
+        const selectedUser = userSelect.options[userSelect.selectedIndex];
+        if (!selectedUser) throw new Error("צריך לבחור משתמש מהרשימה או לסמן 'בצע עליי'.");
+
+        return selectedUser.dataset.userid;
+      }
+
+      function getSelectedUserLabel() {
+        if (useCurrentUserCheckbox.checked) {
+          return "משתמש נבחר: המשתמש המחובר";
+        }
+
+        const selectedUser = userSelect.options[userSelect.selectedIndex];
+        if (!selectedUser) return "לא נבחר משתמש";
+
+        return `משתמש נבחר: ${selectedUser.dataset.fullname || ""} | ${selectedUser.dataset.domainname || "ללא domain"} | ${selectedUser.dataset.isdisabled === "true" ? "לא פעיל" : "פעיל"}`;
+      }
+
+      function toggleUserSelectionState() {
+        const disabled = useCurrentUserCheckbox.checked;
+
+        userSearchInput.disabled = disabled;
+        userSelect.disabled = disabled;
+        userSearchInput.style.opacity = disabled ? "0.6" : "1";
+        userSelect.style.opacity = disabled ? "0.6" : "1";
+      }
+
+      function renderUsers(searchText = "") {
+        const q = searchText.trim().toLowerCase();
+        userSelect.innerHTML = "";
+
+        const filtered = allUsers.filter(u => {
+          if (!q) return true;
+          return (
+            (u.fullname || "").toLowerCase().includes(q) ||
+            (u.domainname || "").toLowerCase().includes(q) ||
+            (u.username || "").toLowerCase().includes(q) ||
+            (u.internalemailaddress || "").toLowerCase().includes(q)
+          );
+        });
+
+        for (const user of filtered) {
+          const option = document.createElement("option");
+          option.value = user.id;
+          option.textContent = `${user.fullname || "(ללא שם)"} | ${user.username || user.domainname || "ללא domain"} | ${user.isdisabled ? "לא פעיל" : "פעיל"}`;
+          option.dataset.userid = user.id;
+          option.dataset.fullname = user.fullname || "";
+          option.dataset.domainname = user.domainname || "";
+          option.dataset.email = user.internalemailaddress || "";
+          option.dataset.isdisabled = String(user.isdisabled);
+          userSelect.appendChild(option);
+        }
+
+        if (filtered.length > 0) userSelect.selectedIndex = 0;
+      }
+
+      function renderRoles(searchText = "") {
+        const q = searchText.trim().toLowerCase();
+        roleSelect.innerHTML = "";
+
+        const filtered = allRoles.filter(r => {
+          if (!q) return true;
+          return (r.name || "").toLowerCase().includes(q);
+        });
+
+        for (const role of filtered) {
+          const option = document.createElement("option");
+          option.value = role.name;
+          option.textContent = role.name;
+          option.dataset.roleid = role.id;
+          roleSelect.appendChild(option);
+        }
+
+        if (filtered.length > 0) roleSelect.selectedIndex = 0;
+      }
+
+      async function getUserRoles(userId) {
+        const url =
+          `${BASE_URL}/systemusers(${userId})` +
+          `?$select=fullname,domainname,isdisabled` +
+          `&$expand=systemuserroles_association($select=roleid,name,_businessunitid_value)`;
+
+        const userData = await fetchJSON(url);
+
+        return {
+          user: {
+            fullname: userData.fullname || "",
+            domainname: userData.domainname || "",
+            isdisabled: !!userData.isdisabled
+          },
+          roles: (userData.systemuserroles_association || []).map(r => ({
+            roleid: r.roleid,
+            name: r.name || "",
+            businessunitid: r._businessunitid_value || ""
+          }))
+        };
+      }
+
+      async function addUserRole(userId, roleId) {
+        const roleData = await fetchJSON(`${BASE_URL}/roles(${roleId})?$select=roleid,name`);
+
+        await fetchJSON(`${BASE_URL}/systemusers(${userId})/systemuserroles_association/$ref`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            "@odata.id": `${BASE_URL}/roles(${roleData.roleid})`
+          })
+        });
+
+        return roleData;
+      }
+
+      async function removeUserRole(userId, roleId) {
+        await fetchJSON(`${BASE_URL}/systemusers(${userId})/systemuserroles_association(${roleId})/$ref`, {
+          method: "DELETE",
+          headers: { "If-Match": "*" }
+        });
+      }
+
+      function renderRolesRows(roles, userId) {
+        rowsBox.innerHTML = "";
+
+        if (!roles.length) {
+          const empty = document.createElement("div");
+          empty.style.cssText = "padding:14px;";
+          empty.textContent = "לא נמצאו תפקידי אבטחה למשתמש זה.";
+          rowsBox.appendChild(empty);
+          return;
+        }
+
+        const sortedRoles = [...roles].sort((a, b) => {
+          const nameCompare = (a.name || "").localeCompare(b.name || "", "he");
+          if (nameCompare !== 0) return nameCompare;
+          return (businessUnitsMap[a.businessunitid] || "").localeCompare(businessUnitsMap[b.businessunitid] || "", "he");
+        });
+
+        for (const role of sortedRoles) {
+          const row = document.createElement("div");
+          row.style.cssText = `
+            display:grid;
+            grid-template-columns:1.5fr 1fr 140px;
+            padding:12px;
+            border-bottom:1px solid #eee;
+            align-items:center;
+          `;
+
+          const roleNameCell = document.createElement("div");
+          roleNameCell.textContent = role.name || "";
+
+          const buCell = document.createElement("div");
+          buCell.textContent = businessUnitsMap[role.businessunitid] || role.businessunitid || "";
+
+          const actionCell = document.createElement("div");
+          const removeBtn = document.createElement("button");
+          removeBtn.textContent = "הסר";
+          removeBtn.style.cssText = `
+            border:none;
+            background:#d13438;
+            color:white;
+            border-radius:8px;
+            padding:8px 12px;
+            cursor:pointer;
+            font-size:14px;
+          `;
+
+          removeBtn.addEventListener("click", async () => {
+            if (!confirm(`להסיר את התפקיד "${role.name}" מהמשתמש?`)) return;
+
+            removeBtn.disabled = true;
+            statusBox.textContent = `מסיר את התפקיד "${role.name}"...`;
+
+            try {
+              await removeUserRole(userId, role.roleid);
+              statusBox.textContent = `✅ התפקיד "${role.name}" הוסר בהצלחה`;
+              await refreshUserRoles(userId, selectedUserBox.textContent);
+            } catch (err) {
+              statusBox.textContent = `❌ שגיאה בהסרה: ${err.message}`;
+            } finally {
+              removeBtn.disabled = false;
+            }
+          });
+
+          actionCell.appendChild(removeBtn);
+          row.appendChild(roleNameCell);
+          row.appendChild(buCell);
+          row.appendChild(actionCell);
+          rowsBox.appendChild(row);
+        }
+      }
+
+      async function refreshUserRoles(userId, userLabel) {
+        currentSelectedUserId = userId;
+        rowsBox.innerHTML = "";
+        selectedUserBox.textContent = userLabel || getSelectedUserLabel();
+        statusBox.textContent = "טוען תפקידי אבטחה...";
+
+        const result = await getUserRoles(userId);
+        renderRolesRows(result.roles, userId);
+
+        statusBox.textContent =
+          `✅ נמצאו ${result.roles.length} תפקידי אבטחה עבור ${result.user.fullname}` +
+          (result.user.domainname ? ` (${result.user.domainname})` : "");
+      }
+
+      try {
+        statusBox.textContent = "טוען משתמשים, תפקידים ויחידות עסקיות...";
+        await Promise.all([loadUsers(), loadRoles()]);
+        renderUsers();
+        renderRoles();
+        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים ו-${allRoles.length} תפקידים`;
+      } catch (err) {
+        statusBox.textContent = `❌ שגיאה בטעינה: ${err.message}`;
+        return;
+      }
+
+      useCurrentUserCheckbox.addEventListener("change", toggleUserSelectionState);
+      toggleUserSelectionState();
+
+      userSearchInput.addEventListener("input", () => renderUsers(userSearchInput.value));
+      roleSearchInput.addEventListener("input", () => renderRoles(roleSearchInput.value));
+
+      clearBtn.addEventListener("click", () => {
+        userSearchInput.value = "";
+        roleSearchInput.value = "";
+        renderUsers();
+        renderRoles();
+        currentSelectedUserId = null;
+        selectedUserBox.textContent = "לא נבחר משתמש";
+        rowsBox.innerHTML = "";
+        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים ו-${allRoles.length} תפקידים`;
+      });
+
+      showBtn.addEventListener("click", async () => {
+        showBtn.disabled = true;
+
+        try {
+          const userId = getSelectedUserId();
+          await refreshUserRoles(userId, getSelectedUserLabel());
+        } catch (err) {
+          statusBox.textContent = `❌ שגיאה: ${err.message}`;
+        } finally {
+          showBtn.disabled = false;
+        }
+      });
+
+      addBtn.addEventListener("click", async () => {
+        const selectedRole = roleSelect.options[roleSelect.selectedIndex];
+
+        if (!selectedRole) {
+          statusBox.textContent = "צריך לבחור תפקיד מהרשימה.";
+          return;
+        }
+
+        addBtn.disabled = true;
+
+        try {
+          const userId = getSelectedUserId();
+          const roleId = selectedRole.dataset.roleid;
+          const roleName = selectedRole.value;
+
+          statusBox.textContent = `מקצה את התפקיד "${roleName}"...`;
+
+          const role = await addUserRole(userId, roleId);
+
+          statusBox.textContent = `✅ התפקיד "${role.name}" הוקצה בהצלחה`;
+          await refreshUserRoles(userId, getSelectedUserLabel());
+        } catch (err) {
+          statusBox.textContent = `❌ שגיאה בהוספה: ${err.message}`;
+        } finally {
+          addBtn.disabled = false;
+        }
+      });
+    }
+  });
+});
+
+
+document.getElementById("quickUpdateFieldUi").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: async () => {
+      document.getElementById("__d365helper_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365helper_modal";
+      overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.35);
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        direction: ltr;
+      `;
+
+      const modal = document.createElement("div");
+      modal.style.cssText = `
+        width: min(1200px, 96vw);
+        max-height: 92vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,.25);
+        padding: 20px;
+        font-family: Segoe UI, Arial, sans-serif;
+      `;
+
+      modal.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
+          <h2 style="margin:0;font-size:22px;">Quick Update Field</h2>
+          <button id="__quickUpdateClose" style="
+            border:none;
+            background:#f3f3f3;
+            border-radius:10px;
+            padding:8px 12px;
+            cursor:pointer;
+            font-size:16px;
+          ">✖</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns: 440px 1fr; gap:20px; align-items:start;">
+          <div>
+            <label style="display:block;font-weight:600;margin-bottom:6px;">Entity logical name</label>
+            <input id="__quickUpdateEntity" type="text" placeholder="e.g. account"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;" />
+
+            <label style="display:block;font-weight:600;margin-bottom:6px;">Record GUID</label>
+            <input id="__quickUpdateId" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;" />
+
+            <label style="display:block;font-weight:600;margin-bottom:6px;">Field logical name</label>
+            <input id="__quickUpdateField" type="text" placeholder="e.g. name / ey_xxx / ownerid"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;" />
+
+            <label style="display:block;font-weight:600;margin-bottom:6px;">Field type</label>
+            <select id="__quickUpdateType"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;">
+              <option value="string">String</option>
+              <option value="memo">Memo</option>
+              <option value="integer">Whole Number</option>
+              <option value="decimal">Decimal</option>
+              <option value="double">Double</option>
+              <option value="boolean">Two Options</option>
+              <option value="datetime">Date Time</option>
+              <option value="optionset">Option Set (integer)</option>
+              <option value="lookup">Lookup (@odata.bind)</option>
+            </select>
+
+            <label style="display:block;font-weight:600;margin-bottom:6px;">New value</label>
+            <textarea id="__quickUpdateValue" spellcheck="false"
+              style="width:100%;min-height:120px;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:12px;box-sizing:border-box;resize:vertical;"
+              placeholder="Enter new value"></textarea>
+
+            <div id="__quickUpdateLookupHelp" style="
+              display:none;
+              margin-bottom:12px;
+              padding:12px;
+              background:#f7f7f7;
+              border-radius:10px;
+              font-size:13px;
+              line-height:1.5;
+              white-space:pre-wrap;
+              color:#444;
+            ">For lookup use JSON:
+{
+  "entitySetName": "systemusers",
+  "id": "GUID"
+}</div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button id="__quickUpdateLoadCurrent" style="
+                border:none;
+                background:#0f6cbd;
+                color:white;
+                border-radius:10px;
+                padding:10px 16px;
+                cursor:pointer;
+                font-size:14px;
+              ">Load Current Value</button>
+
+              <button id="__quickUpdateSubmit" style="
+                border:none;
+                background:#107c10;
+                color:white;
+                border-radius:10px;
+                padding:10px 16px;
+                cursor:pointer;
+                font-size:14px;
+              ">Update</button>
+
+              <button id="__quickUpdateClear" style="
+                border:none;
+                background:#eaeaea;
+                color:#222;
+                border-radius:10px;
+                padding:10px 16px;
+                cursor:pointer;
+                font-size:14px;
+              ">Clear</button>
+            </div>
+          </div>
+
+          <div>
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+              margin-bottom:14px;
+            ">
+              <div style="
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">Current Value</div>
+              <div id="__quickUpdateCurrentValue" style="
+                padding:14px;
+                min-height:120px;
+                white-space:pre-wrap;
+                word-break:break-word;
+                font-family:Consolas, monospace;
+                font-size:13px;
+              ">Not loaded</div>
+            </div>
+
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+              margin-bottom:14px;
+            ">
+              <div style="
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">Payload Preview</div>
+              <div id="__quickUpdatePayloadPreview" style="
+                padding:14px;
+                min-height:120px;
+                white-space:pre-wrap;
+                word-break:break-word;
+                font-family:Consolas, monospace;
+                font-size:13px;
+              ">{}</div>
+            </div>
+
+            <div style="
+              border:1px solid #ddd;
+              border-radius:12px;
+              overflow:hidden;
+              background:#fff;
+            ">
+              <div style="
+                background:#f3f3f3;
+                font-weight:700;
+                padding:12px;
+                border-bottom:1px solid #ddd;
+              ">Status</div>
+              <div id="__quickUpdateStatus" style="
+                padding:14px;
+                min-height:80px;
+                white-space:pre-wrap;
+                font-size:14px;
+              ">Ready</div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      const closeModal = () => overlay.remove();
+      document.getElementById("__quickUpdateClose").onclick = closeModal;
+
+      const entityInput = document.getElementById("__quickUpdateEntity");
+      const idInput = document.getElementById("__quickUpdateId");
+      const fieldInput = document.getElementById("__quickUpdateField");
+      const typeSelect = document.getElementById("__quickUpdateType");
+      const valueInput = document.getElementById("__quickUpdateValue");
+      const lookupHelp = document.getElementById("__quickUpdateLookupHelp");
+      const loadCurrentBtn = document.getElementById("__quickUpdateLoadCurrent");
+      const submitBtn = document.getElementById("__quickUpdateSubmit");
+      const clearBtn = document.getElementById("__quickUpdateClear");
+      const currentValueBox = document.getElementById("__quickUpdateCurrentValue");
+      const payloadPreviewBox = document.getElementById("__quickUpdatePayloadPreview");
+      const statusBox = document.getElementById("__quickUpdateStatus");
+
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+      const BASE_URL = `${clientUrl}/api/data/v9.2`;
+
+      function normalizeGuid(value) {
+        return String(value || "").replace(/[{}]/g, "").trim();
+      }
+
+      function isGuid(value) {
+        return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
+      }
+
+      async function fetchJSON(url, options = {}) {
+        const res = await fetch(url, {
+          ...options,
+          headers: {
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Accept": "application/json;odata.include-annotations=*",
+            "Content-Type": "application/json; charset=utf-8",
+            ...(options.headers || {})
+          },
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) {
+          let message = `${res.status}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        if (res.status === 204) return null;
+        return await res.json();
+      }
+
+      async function getEntitySetName(logicalName) {
+        const url =
+          `${BASE_URL}/EntityDefinitions(LogicalName='${logicalName}')?$select=EntitySetName`;
+
+        const data = await fetchJSON(url);
+        if (!data || !data.EntitySetName) {
+          throw new Error(`EntitySetName not found for '${logicalName}'`);
+        }
+
+        return data.EntitySetName;
+      }
+
+      function tryGetCurrentRecordContext() {
+        try {
+          if (window.Xrm?.Page?.data?.entity) {
+            const entityName = Xrm.Page.data.entity.getEntityName?.();
+            const id = normalizeGuid(Xrm.Page.data.entity.getId?.());
+            return { entityName, id };
+          }
+        } catch (_) {}
+
+        try {
+          const pageEntity = window.parent?.Xrm?.Page?.data?.entity;
+          if (pageEntity) {
+            const entityName = pageEntity.getEntityName?.();
+            const id = normalizeGuid(pageEntity.getId?.());
+            return { entityName, id };
+          }
+        } catch (_) {}
+
+        return null;
+      }
+
+      function updateLookupHelpVisibility() {
+        lookupHelp.style.display = typeSelect.value === "lookup" ? "block" : "none";
+      }
+
+      function parseInputValue(type, rawValue, fieldName) {
+        const value = rawValue ?? "";
+
+        switch (type) {
+          case "string":
+          case "memo":
+            return { [fieldName]: String(value) };
+
+          case "integer": {
+            if (String(value).trim() === "") throw new Error("Integer value is required");
+            const parsed = parseInt(value, 10);
+            if (Number.isNaN(parsed)) throw new Error("Invalid integer value");
+            return { [fieldName]: parsed };
+          }
+
+          case "decimal":
+          case "double": {
+            if (String(value).trim() === "") throw new Error("Numeric value is required");
+            const parsed = Number(value);
+            if (Number.isNaN(parsed)) throw new Error("Invalid numeric value");
+            return { [fieldName]: parsed };
+          }
+
+          case "boolean": {
+            const normalized = String(value).trim().toLowerCase();
+            if (["true", "1", "yes"].includes(normalized)) return { [fieldName]: true };
+            if (["false", "0", "no"].includes(normalized)) return { [fieldName]: false };
+            throw new Error("Boolean must be true/false or 1/0");
+          }
+
+          case "datetime": {
+            if (String(value).trim() === "") throw new Error("Datetime value is required");
+            const dt = new Date(value);
+            if (isNaN(dt.getTime())) throw new Error("Invalid datetime value");
+            return { [fieldName]: dt.toISOString() };
+          }
+
+          case "optionset": {
+            if (String(value).trim() === "") throw new Error("Option Set integer value is required");
+            const parsed = parseInt(value, 10);
+            if (Number.isNaN(parsed)) throw new Error("Invalid Option Set value");
+            return { [fieldName]: parsed };
+          }
+
+          case "lookup": {
+            let parsed;
+            try {
+              parsed = JSON.parse(value);
+            } catch (_) {
+              throw new Error('Lookup value must be JSON like {"entitySetName":"systemusers","id":"GUID"}');
+            }
+
+            const entitySetName = String(parsed.entitySetName || "").trim();
+            const id = normalizeGuid(parsed.id || "");
+
+            if (!entitySetName) throw new Error("Lookup JSON missing entitySetName");
+            if (!isGuid(id)) throw new Error("Lookup JSON contains invalid GUID");
+
+            return {
+              [`${fieldName}@odata.bind`]: `/${entitySetName}(${id})`
+            };
+          }
+
+          default:
+            throw new Error(`Unsupported field type: ${type}`);
+        }
+      }
+
+      function refreshPayloadPreview() {
+          try {
+            const fieldName = fieldInput.value.trim();
+            const type = typeSelect.value;
+            const rawValue = valueInput.value;
+
+            if (!fieldName) {
+              payloadPreviewBox.textContent = "{}";
+              return;
+            }
+
+            if (String(rawValue).trim() === "") {
+              payloadPreviewBox.textContent = "{}";
+              return;
+            }
+
+            const payload = parseInputValue(type, rawValue, fieldName);
+            payloadPreviewBox.textContent = JSON.stringify(payload, null, 2);
+          } catch (err) {
+            payloadPreviewBox.textContent = `Invalid payload: ${err.message}`;
+          }
+        }
+async function getLookupTargetEntity(entityLogicalName, fieldName) {
+  const url =
+    `${BASE_URL}/EntityDefinitions(LogicalName='${entityLogicalName}')` +
+    `/Attributes(LogicalName='${fieldName}')/Microsoft.Dynamics.CRM.LookupAttributeMetadata` +
+    `?$select=LogicalName,Targets`;
+
+  const data = await fetchJSON(url);
+
+  if (Array.isArray(data?.Targets) && data.Targets.length > 0) {
+    return data.Targets[0];
+  }
+
+  return null;
+}
+     async function loadCurrentValue() {
+  const entityLogicalName = entityInput.value.trim();
+  const recordId = normalizeGuid(idInput.value);
+  const fieldName = fieldInput.value.trim();
+  const fieldType = typeSelect.value;
+
+  if (!entityLogicalName) throw new Error("Entity logical name is required");
+  if (!fieldName) throw new Error("Field logical name is required");
+  if (!isGuid(recordId)) throw new Error("Valid GUID is required");
+
+  const entitySetName = await getEntitySetName(entityLogicalName);
+
+  let selectFieldName = fieldName;
+  let responseFieldName = fieldName;
+
+  if (fieldType === "lookup") {
+    selectFieldName = `_${fieldName}_value`;
+    responseFieldName = selectFieldName;
+  }
+
+  const url =
+    `${BASE_URL}/${entitySetName}(${recordId})?$select=${encodeURIComponent(selectFieldName)}`;
+
+  const data = await fetchJSON(url);
+
+  const raw = data[responseFieldName] ?? null;
+  const formatted =
+    data[`${responseFieldName}@OData.Community.Display.V1.FormattedValue`] ?? null;
+
+  const result = {
+    raw,
+    formatted
+  };
+
+  if (fieldType === "lookup") {
+    let logicalName =
+      data[`${responseFieldName}@Microsoft.Dynamics.CRM.lookuplogicalname`] ?? null;
+
+    if (!logicalName) {
+      try {
+        logicalName = await getLookupTargetEntity(entityLogicalName, fieldName);
+      } catch (_) {}
+    }
+
+    result.logicalName = logicalName ?? null;
+
+    if (raw && logicalName) {
+  try {
+    const lookupEntitySetName = await getEntitySetName(logicalName);
+
+    valueInput.value = JSON.stringify({
+      entitySetName: lookupEntitySetName,
+      id: raw
+    }, null, 2);
+
+    // 🔥 זה החדש — להביא שם
+    const name = await getLookupFormattedValue(logicalName, raw);
+
+    result.formatted = name;
+  } catch (_) {}
+}
+  }
+
+  currentValueBox.textContent = JSON.stringify(result, null, 2);
+  refreshPayloadPreview();
+}
+async function getLookupFormattedValue(entityLogicalName, id) {
+  const entitySetName = await getEntitySetName(entityLogicalName);
+  const primaryName = await getPrimaryNameField(entityLogicalName);
+
+  const url =
+    `${BASE_URL}/${entitySetName}(${id})?$select=${primaryName}`;
+
+  const data = await fetchJSON(url);
+
+  return data[primaryName] ?? null;
+}
+async function getPrimaryNameField(entityLogicalName) {
+  const url =
+    `${BASE_URL}/EntityDefinitions(LogicalName='${entityLogicalName}')?$select=PrimaryNameAttribute`;
+
+  const data = await fetchJSON(url);
+  return data.PrimaryNameAttribute;
+}
+      async function submitUpdate() {
+        const entityLogicalName = entityInput.value.trim();
+        const recordId = normalizeGuid(idInput.value);
+        const fieldName = fieldInput.value.trim();
+        const type = typeSelect.value;
+        const rawValue = valueInput.value;
+
+        if (!entityLogicalName) throw new Error("Entity logical name is required");
+        if (!fieldName) throw new Error("Field logical name is required");
+        if (!isGuid(recordId)) throw new Error("Valid GUID is required");
+
+        const payload = parseInputValue(type, rawValue, fieldName);
+        const entitySetName = await getEntitySetName(entityLogicalName);
+        const url = `${BASE_URL}/${entitySetName}(${recordId})`;
+
+        await fetchJSON(url, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+          headers: {
+            "If-Match": "*"
+          }
+        });
+
+        payloadPreviewBox.textContent = JSON.stringify(payload, null, 2);
+      }
+
+      function clearForm() {
+        const detected = tryGetCurrentRecordContext();
+
+        fieldInput.value = "";
+        typeSelect.value = "string";
+        valueInput.value = "";
+        currentValueBox.textContent = "Not loaded";
+        payloadPreviewBox.textContent = "{}";
+        statusBox.textContent = "Ready";
+
+        if (detected?.entityName) entityInput.value = detected.entityName;
+        if (detected?.id) idInput.value = detected.id;
+
+        updateLookupHelpVisibility();
+        refreshPayloadPreview();
+      }
+
+      const detectedContext = tryGetCurrentRecordContext();
+      if (detectedContext?.entityName) entityInput.value = detectedContext.entityName;
+      if (detectedContext?.id) idInput.value = detectedContext.id;
+
+      updateLookupHelpVisibility();
+      refreshPayloadPreview();
+
+      typeSelect.addEventListener("change", () => {
+        updateLookupHelpVisibility();
+        refreshPayloadPreview();
+      });
+
+      fieldInput.addEventListener("input", refreshPayloadPreview);
+      valueInput.addEventListener("input", refreshPayloadPreview);
+
+      loadCurrentBtn.addEventListener("click", async () => {
+        loadCurrentBtn.disabled = true;
+        statusBox.textContent = "Loading current value...";
+
+        try {
+          await loadCurrentValue();
+          statusBox.textContent = "✅ Current value loaded";
+        } catch (err) {
+          statusBox.textContent = `❌ ${err.message}`;
+        } finally {
+          loadCurrentBtn.disabled = false;
+        }
+      });
+
+      submitBtn.addEventListener("click", async () => {
+        submitBtn.disabled = true;
+        statusBox.textContent = "Updating...";
+
+        try {
+          await submitUpdate();
+          statusBox.textContent = "✅ Record updated successfully";
+
+          try {
+            await loadCurrentValue();
+          } catch (_) {}
+        } catch (err) {
+          statusBox.textContent = `❌ ${err.message}`;
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+
+      clearBtn.addEventListener("click", clearForm);
     }
   });
 });
