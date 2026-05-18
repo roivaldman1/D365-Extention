@@ -2457,32 +2457,573 @@ document.getElementById("showDirtyFields").addEventListener("click", async () =>
     }
   });
 });
-document.getElementById("openDefaultView").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !tab.url) return;
 
-  // ask entity
-  const entity = prompt("Enter entity logical name (example: contact, incident, account):");
-  if (!entity) return;
 
-  const cleanEntity = entity.trim().toLowerCase();
-  if (!cleanEntity) return;
 
-  // get base org url + current appid from the current tab
-  const u = new URL(tab.url);
-  const orgUrl = `${u.protocol}//${u.host}`;
-  const appid = u.searchParams.get("appid"); // can be null
+document.getElementById("openDefaultView")?.addEventListener("click", async () => {
 
-  // build default view url
-  // Note: # is optional; without it D365 still opens the default view for that entity
-  const url =
-    `${orgUrl}/main.aspx?` +
-    (appid ? `appid=${encodeURIComponent(appid)}&` : "") +
-    `pagetype=entitylist&etn=${encodeURIComponent(cleanEntity)}`;
+  const [tab] = await chrome.tabs.query({
+    active: true,
+    currentWindow: true
+  });
 
-  // open in new tab
-  chrome.tabs.create({ url });
+  if (!tab?.id || !tab.url) {
+    alert("No active Dynamics tab found.");
+    return;
+  }
+
+  // OPEN POPUP IMMEDIATELY
+  const popup = showEntityPickerPopup([], tab.url, true);
+
+  try {
+
+    const frameResults = await chrome.scripting.executeScript({
+      target: {
+        tabId: tab.id,
+        allFrames: true
+      },
+      world: "MAIN",
+
+      func: async () => {
+
+        try {
+
+          const Xrm = window.Xrm;
+
+          if (!Xrm?.Utility) {
+
+            return {
+              ok: false,
+              hasXrm: false
+            };
+          }
+
+          const clientUrl =
+            Xrm.Utility.getGlobalContext().getClientUrl();
+
+          const url =
+            clientUrl +
+            "/api/data/v9.2/EntityDefinitions" +
+            "?$select=LogicalName,DisplayName,ObjectTypeCode,IsCustomEntity,IsActivity,IsIntersect" +
+            "&$filter=IsIntersect eq false";
+
+          const response = await fetch(url, {
+            method: "GET",
+            headers: {
+              "Accept": "application/json",
+              "Content-Type": "application/json; charset=utf-8",
+              "OData-MaxVersion": "4.0",
+              "OData-Version": "4.0"
+            }
+          });
+
+          if (!response.ok) {
+
+            const text = await response.text();
+
+            throw new Error(text);
+          }
+
+          const json = await response.json();
+
+          const entities = json.value
+            .map(e => ({
+              logicalName: e.LogicalName,
+              displayName:
+                e.DisplayName?.UserLocalizedLabel?.Label ||
+                e.LogicalName,
+              objectTypeCode: e.ObjectTypeCode,
+              isCustom: e.IsCustomEntity,
+              isActivity: e.IsActivity
+            }))
+            .filter(e => e.logicalName)
+            .sort((a, b) =>
+              a.displayName.localeCompare(b.displayName)
+            );
+
+          return {
+            ok: true,
+            hasXrm: true,
+            entities
+          };
+
+        } catch (e) {
+
+          return {
+            ok: false,
+            hasXrm: true,
+            message: e.message || String(e)
+          };
+        }
+      }
+    });
+
+    const crmFrameResult =
+      frameResults.find(r => r.result?.hasXrm);
+
+    if (!crmFrameResult) {
+
+      popup.setError(
+        "Could not find Xrm. Open this on a Dynamics 365 page."
+      );
+
+      return;
+    }
+
+    const data = crmFrameResult.result;
+
+    if (!data.ok) {
+
+      popup.setError(
+        data.message || "Failed to retrieve entities."
+      );
+
+      return;
+    }
+
+    popup.setEntities(data.entities || []);
+
+  } catch (e) {
+
+    popup.setError(
+      e.message || String(e)
+    );
+  }
 });
+
+
+function showEntityPickerPopup(
+  initialEntities,
+  currentUrl,
+  loading = false
+) {
+
+  document.getElementById("entityPickerOverlay")?.remove();
+  document.getElementById("entityPickerStyle")?.remove();
+
+  const overlay = document.createElement("div");
+
+  overlay.id = "entityPickerOverlay";
+
+  overlay.innerHTML = `
+    <div class="entity-picker-modal">
+
+      <div class="entity-picker-header">
+        <div>
+          <h2>Open Entity View</h2>
+          <p>Search entity from current CRM</p>
+        </div>
+
+        <button
+          id="entityPickerClose"
+          class="entity-picker-close"
+        >
+          ×
+        </button>
+      </div>
+
+      <input
+        id="entityPickerSearch"
+        class="entity-picker-search"
+        type="text"
+        placeholder="Search display name or logical name..."
+      />
+
+      <div
+        id="entityPickerLoading"
+        class="entity-picker-loading"
+        style="${loading ? "" : "display:none"}"
+      >
+        Loading entities...
+      </div>
+
+      <div
+        id="entityPickerError"
+        class="entity-picker-error"
+        style="display:none"
+      ></div>
+
+      <div
+        id="entityPickerList"
+        class="entity-picker-list"
+      ></div>
+
+      <div class="entity-picker-footer">
+
+        <input
+          id="entityPickerManual"
+          class="entity-picker-manual"
+          type="text"
+          placeholder="Manual logical name..."
+        />
+
+        <button
+          id="entityPickerOpenManual"
+          class="entity-picker-open"
+        >
+          Open
+        </button>
+
+      </div>
+
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const style = document.createElement("style");
+
+  style.id = "entityPickerStyle";
+
+  style.textContent = `
+    #entityPickerOverlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 999999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      direction: rtl;
+      font-family: Arial, sans-serif;
+    }
+
+    .entity-picker-modal {
+      width: 540px;
+      max-width: calc(100vw - 24px);
+      max-height: calc(100vh - 24px);
+      background: #1f1f1f;
+      color: white;
+      border-radius: 14px;
+      border: 1px solid #444;
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .entity-picker-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      border-bottom: 1px solid #333;
+    }
+
+    .entity-picker-header h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .entity-picker-header p {
+      margin: 4px 0 0;
+      color: #aaa;
+      font-size: 12px;
+    }
+
+    .entity-picker-close {
+      background: transparent;
+      border: 0;
+      color: white;
+      font-size: 28px;
+      cursor: pointer;
+    }
+
+    .entity-picker-search,
+    .entity-picker-manual {
+      width: calc(100% - 32px);
+      margin: 14px 16px;
+      padding: 11px;
+      border-radius: 8px;
+      border: 1px solid #555;
+      background: #121212;
+      color: white;
+      box-sizing: border-box;
+      outline: none;
+    }
+
+    .entity-picker-loading {
+      padding: 24px;
+      text-align: center;
+      color: #8cc8ff;
+    }
+
+    .entity-picker-error {
+      padding: 20px;
+      text-align: center;
+      color: #ff8c8c;
+    }
+
+    .entity-picker-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 12px 12px;
+      min-height: 120px;
+      max-height: 420px;
+    }
+
+    .entity-picker-row {
+      width: 100%;
+      text-align: start;
+      padding: 11px 12px;
+      margin-bottom: 6px;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: #2a2a2a;
+      color: white;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .entity-picker-row:hover {
+      background: #333;
+      border-color: #6aa9ff;
+    }
+
+    .entity-picker-name {
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    .entity-picker-logical {
+      color: #aaa;
+      font-size: 12px;
+      direction: ltr;
+      text-align: left;
+    }
+
+    .entity-picker-tags {
+      color: #8cc8ff;
+      font-size: 11px;
+    }
+
+    .entity-picker-empty {
+      color: #aaa;
+      text-align: center;
+      padding: 28px;
+    }
+
+    .entity-picker-footer {
+      border-top: 1px solid #333;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-bottom: 14px;
+    }
+
+    .entity-picker-footer .entity-picker-manual {
+      flex: 1;
+      margin-left: 0;
+    }
+
+    .entity-picker-open {
+      margin-left: 16px;
+      padding: 11px 18px;
+      border-radius: 8px;
+      border: 0;
+      background: #6aa9ff;
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+    }
+  `;
+
+  document.head.appendChild(style);
+
+  const searchInput =
+    document.getElementById("entityPickerSearch");
+
+  const list =
+    document.getElementById("entityPickerList");
+
+  const loadingEl =
+    document.getElementById("entityPickerLoading");
+
+  const errorEl =
+    document.getElementById("entityPickerError");
+
+  const closeBtn =
+    document.getElementById("entityPickerClose");
+
+  const manualInput =
+    document.getElementById("entityPickerManual");
+
+  const manualBtn =
+    document.getElementById("entityPickerOpenManual");
+
+  let entities = initialEntities || [];
+
+  function closePopup() {
+
+    document.getElementById("entityPickerOverlay")?.remove();
+
+    document.getElementById("entityPickerStyle")?.remove();
+  }
+
+  function openEntity(logicalName) {
+
+    const cleanEntity =
+      logicalName?.trim().toLowerCase();
+
+    if (!cleanEntity) {
+      alert("Enter entity logical name.");
+      return;
+    }
+
+    const u = new URL(currentUrl);
+
+    const orgUrl =
+      `${u.protocol}//${u.host}`;
+
+    const appid =
+      u.searchParams.get("appid");
+
+    const url =
+      `${orgUrl}/main.aspx?` +
+      (appid
+        ? `appid=${encodeURIComponent(appid)}&`
+        : "") +
+      `pagetype=entitylist&etn=${encodeURIComponent(cleanEntity)}`;
+
+    chrome.tabs.create({ url });
+
+    closePopup();
+  }
+
+  function escapeHtml(value) {
+
+    return String(value || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function render(filterText = "") {
+
+    const q =
+      filterText.trim().toLowerCase();
+
+    const filtered = entities.filter(e => {
+
+      const text =
+        `${e.displayName} ${e.logicalName}`.toLowerCase();
+
+      return !q || text.includes(q);
+    });
+
+    list.innerHTML = "";
+
+    if (!filtered.length) {
+
+      list.innerHTML =
+        `<div class="entity-picker-empty">
+          No entities found
+        </div>`;
+
+      return;
+    }
+
+    filtered.slice(0, 500).forEach(e => {
+
+      const btn =
+        document.createElement("button");
+
+      btn.className =
+        "entity-picker-row";
+
+      const tags = [];
+
+      if (e.isCustom) tags.push("Custom");
+
+      if (e.isActivity) tags.push("Activity");
+
+      if (e.objectTypeCode)
+        tags.push(`OTC ${e.objectTypeCode}`);
+
+      btn.innerHTML = `
+        <span class="entity-picker-name">
+          ${escapeHtml(e.displayName)}
+        </span>
+
+        <span class="entity-picker-logical">
+          ${escapeHtml(e.logicalName)}
+        </span>
+
+        <span class="entity-picker-tags">
+          ${escapeHtml(tags.join(" • "))}
+        </span>
+      `;
+
+      btn.addEventListener("click", () =>
+        openEntity(e.logicalName)
+      );
+
+      list.appendChild(btn);
+    });
+  }
+
+  function setEntities(newEntities) {
+
+    entities = newEntities || [];
+
+    loadingEl.style.display = "none";
+
+    errorEl.style.display = "none";
+
+    render(searchInput.value);
+  }
+
+  function setError(message) {
+
+    loadingEl.style.display = "none";
+
+    errorEl.style.display = "block";
+
+    errorEl.textContent = message;
+  }
+
+  closeBtn.addEventListener("click", closePopup);
+
+  overlay.addEventListener("click", e => {
+
+    if (e.target === overlay) {
+      closePopup();
+    }
+  });
+
+  searchInput.addEventListener("input", () => {
+
+    render(searchInput.value);
+  });
+
+  manualBtn.addEventListener("click", () => {
+
+    openEntity(manualInput.value);
+  });
+
+  manualInput.addEventListener("keydown", e => {
+
+    if (e.key === "Enter") {
+      openEntity(manualInput.value);
+    }
+  });
+
+  render();
+
+  searchInput.focus();
+
+  return {
+    setEntities,
+    setError
+  };
+}
+
+
+
 
 document.getElementById("getRolePermissions").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -2497,123 +3038,106 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
       const overlay = document.createElement("div");
       overlay.id = "__d365helper_modal";
       overlay.style.cssText = `
-        position: fixed; inset: 0; background: rgba(0,0,0,.35);
-        z-index: 2147483647; display: flex; align-items: center; justify-content: center; padding: 16px;
+        position:fixed; inset:0; background:rgba(15,23,42,.45);
+        z-index:2147483647; display:flex; align-items:center; justify-content:center; padding:16px;
       `;
 
       const box = document.createElement("div");
       box.style.cssText = `
-        width: min(1200px, 96vw);
-        height: min(780px, 92vh);
-        background: #fff;
-        border-radius: 14px;
-        box-shadow: 0 18px 50px rgba(0,0,0,.35);
-        overflow: hidden;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-        display: flex;
-        flex-direction: column;
+        width:min(1450px,98vw); height:min(880px,94vh); background:#fff;
+        border-radius:16px; box-shadow:0 24px 70px rgba(0,0,0,.35);
+        overflow:hidden; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        display:flex; flex-direction:column; direction:rtl;
       `;
 
       const header = document.createElement("div");
       header.style.cssText = `
-        padding: 12px 14px;
-        font-weight: 800;
-        border-bottom: 1px solid #e5e7eb;
+        padding:16px 20px; font-size:18px; font-weight:900;
+        border-bottom:1px solid #e5e7eb; color:#111827;
       `;
       header.textContent = "Role Permissions By Entity";
 
       const body = document.createElement("div");
       body.style.cssText = `
-        padding: 12px 14px;
-        display: grid;
-        gap: 10px;
-        min-height: 0;
-        flex: 1;
+        padding:16px; display:grid; gap:12px; flex:1; min-height:0;
+        grid-template-rows:auto auto auto auto 1fr auto;
       `;
 
       const inputStyle = `
-        width: 100%;
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        padding: 10px;
-        font-size: 13px;
-        box-sizing: border-box;
+        width:100%; border:1px solid #cbd5e1; border-radius:12px;
+        padding:12px 14px; font-size:13px; box-sizing:border-box; outline:none;
+        background:#fff; color:#111827;
       `;
 
       const mkRow = (label, el) => {
         const wrap = document.createElement("div");
-        wrap.style.cssText = `display:grid; gap:6px;`;
+        wrap.style.cssText = "display:grid; gap:6px; position:relative;";
         const l = document.createElement("div");
         l.textContent = label;
-        l.style.cssText = `font-size: 12px; font-weight: 700; color: #111827;`;
+        l.style.cssText = "font-size:12px;font-weight:800;color:#111827;";
         wrap.appendChild(l);
         wrap.appendChild(el);
         return wrap;
       };
 
-      const roleInput = document.createElement("input");
-      roleInput.placeholder = "Role name (e.g. מנהל מערכת)";
-      roleInput.style.cssText = inputStyle;
-
-      const entityInput = document.createElement("input");
-      entityInput.placeholder = "Entity logical name (e.g. contact)";
-      entityInput.style.cssText = inputStyle;
-
       const status = document.createElement("div");
-      status.style.cssText = `font-size: 12px; color: #374151;`;
+      status.style.cssText = "font-size:12px;color:#374151;";
 
       const summary = document.createElement("div");
       summary.style.cssText = `
-        font-size: 12px;
-        color: #111827;
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        border-radius: 10px;
-        padding: 10px;
+        font-size:12px; color:#111827; background:#f8fafc;
+        border:1px solid #e5e7eb; border-radius:12px; padding:10px;
       `;
       summary.textContent = "No data yet.";
 
       const tableWrap = document.createElement("div");
       tableWrap.style.cssText = `
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        overflow: auto;
-        min-height: 220px;
-        height: 100%;
-        background: #fff;
+        border:1px solid #cbd5e1; border-radius:12px; overflow:auto;
+        min-height:260px; background:#fff; direction:ltr;
       `;
 
       const table = document.createElement("table");
       table.style.cssText = `
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12px;
-        direction: ltr;
-        text-align: left;
+        width:100%; border-collapse:collapse; font-size:12px; direction:ltr; text-align:left;
       `;
       tableWrap.appendChild(table);
 
       const rawTa = document.createElement("textarea");
       rawTa.readOnly = true;
-      rawTa.placeholder = "Raw JSON will appear here…";
+      rawTa.placeholder = "Raw JSON...";
       rawTa.style.cssText = `
-        width: 100%;
-        height: 150px;
-        resize: vertical;
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        padding: 10px;
-        font-size: 12px;
-        line-height: 1.4;
-        white-space: pre;
-        box-sizing: border-box;
-        font-family: Consolas, Monaco, "Courier New", monospace;
-        direction: ltr;
-        text-align: left;
+        width:100%; height:140px; resize:vertical; border:1px solid #cbd5e1;
+        border-radius:12px; padding:10px; font-size:12px; box-sizing:border-box;
+        font-family:Consolas,monospace; direction:ltr; text-align:left;
       `;
 
-      body.appendChild(mkRow("Role Name", roleInput));
-      body.appendChild(mkRow("Entity Logical Name", entityInput));
+      const roleInput = document.createElement("input");
+      roleInput.placeholder = "Search role / business unit...";
+      roleInput.style.cssText = inputStyle;
+
+      const roleDrop = document.createElement("div");
+      roleDrop.style.cssText = `
+        display:none; position:absolute; top:74px; left:0; right:0;
+        max-height:330px; overflow:auto; background:#fff; border:1px solid #cbd5e1;
+        border-radius:12px; box-shadow:0 16px 40px rgba(0,0,0,.18);
+        z-index:2147483647; direction:ltr; text-align:left;
+      `;
+
+      const entityInput = document.createElement("input");
+      entityInput.placeholder = "Search entity logical name...";
+      entityInput.style.cssText = inputStyle;
+
+      const entityDrop = document.createElement("div");
+      entityDrop.style.cssText = roleDrop.style.cssText;
+
+      const roleRow = mkRow("Role Name / Business Unit", roleInput);
+      roleRow.appendChild(roleDrop);
+
+      const entityRow = mkRow("Entity Logical Name", entityInput);
+      entityRow.appendChild(entityDrop);
+
+      body.appendChild(roleRow);
+      body.appendChild(entityRow);
       body.appendChild(status);
       body.appendChild(summary);
       body.appendChild(tableWrap);
@@ -2621,47 +3145,51 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
 
       const footer = document.createElement("div");
       footer.style.cssText = `
-        display: flex; gap: 10px; justify-content: flex-end;
-        padding: 12px 14px; border-top: 1px solid #e5e7eb;
+        display:flex; gap:10px; justify-content:flex-end;
+        padding:14px 16px; border-top:1px solid #e5e7eb;
       `;
 
-      const btn = (text) => {
+      const btn = (text, bg, color = "#111827") => {
         const b = document.createElement("button");
         b.textContent = text;
         b.style.cssText = `
-          border: 1px solid #cbd5e1;
-          padding: 10px 14px;
-          border-radius: 10px;
-          cursor: pointer;
-          background: #fff;
-          font-weight: 800;
+          border:none; padding:10px 14px; border-radius:10px; cursor:pointer;
+          font-weight:800; background:${bg}; color:${color};
         `;
         return b;
       };
 
-      const btnClose = btn("Close");
+      const btnClose = btn("Close", "#e5e7eb");
+      const btnCopyJson = btn("Copy JSON", "#2563eb", "#fff");
+      const btnCopyCsv = btn("Copy CSV", "#059669", "#fff");
+      const btnRun = btn("Run", "#111827", "#fff");
 
-      const btnCopyJson = btn("Copy JSON");
-      btnCopyJson.style.border = "none";
-      btnCopyJson.style.background = "#2563eb";
-      btnCopyJson.style.color = "#fff";
+      footer.append(btnClose, btnCopyJson, btnCopyCsv, btnRun);
+      box.append(header, body, footer);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
 
-      const btnCopyCsv = btn("Copy CSV");
-      btnCopyCsv.style.border = "none";
-      btnCopyCsv.style.background = "#059669";
-      btnCopyCsv.style.color = "#fff";
-
-      const btnRun = btn("Run");
-      btnRun.style.border = "none";
-      btnRun.style.background = "#111827";
-      btnRun.style.color = "#fff";
-
-      const close = () => overlay.remove();
-      btnClose.onclick = close;
-
+      let rolesOptions = [];
+      let entitiesOptions = [];
+      let selectedRole = null;
       let lastRows = [];
 
-      const escapeHtml = (s) =>
+      const getWebApi = () => window.Xrm?.WebApi?.online || window.Xrm?.WebApi;
+
+      const retrieveAll = async (entityName, query) => {
+        const webApi = getWebApi();
+        let result = await webApi.retrieveMultipleRecords(entityName, query);
+        let rows = [...(result.entities || [])];
+
+        while (result.nextLink) {
+          result = await webApi.retrieveMultipleRecords(entityName, result.nextLink);
+          rows.push(...(result.entities || []));
+        }
+
+        return rows;
+      };
+
+      const escapeHtml = s =>
         String(s ?? "")
           .replaceAll("&", "&amp;")
           .replaceAll("<", "&lt;")
@@ -2669,39 +3197,133 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
           .replaceAll('"', "&quot;")
           .replaceAll("'", "&#039;");
 
-      const copyText = async (text, btnRef, originalLabel) => {
-        try {
-          await navigator.clipboard.writeText(text || "");
-        } catch {
-          rawTa.value = text || "";
-          rawTa.focus();
-          rawTa.select();
-          document.execCommand("copy");
+      const escapeXml = s =>
+        String(s ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&apos;");
+
+      const closeDrops = () => {
+        roleDrop.style.display = "none";
+        entityDrop.style.display = "none";
+      };
+
+      overlay.addEventListener("click", e => {
+        if (!roleRow.contains(e.target) && !entityRow.contains(e.target)) closeDrops();
+      });
+
+      btnClose.onclick = () => overlay.remove();
+
+      const renderDropdown = (drop, items, onSelect, emptyText) => {
+        drop.innerHTML = "";
+
+        if (!items.length) {
+          const empty = document.createElement("div");
+          empty.textContent = emptyText || "No results";
+          empty.style.cssText = "padding:12px;color:#6b7280;font-size:13px;";
+          drop.appendChild(empty);
+          drop.style.display = "block";
+          return;
         }
-        btnRef.textContent = "Copied ✅";
-        setTimeout(() => (btnRef.textContent = originalLabel), 900);
+
+        items.slice(0, 80).forEach(item => {
+          const row = document.createElement("div");
+          row.style.cssText = `
+            padding:10px 12px; cursor:pointer; border-bottom:1px solid #f1f5f9;
+            display:grid; gap:3px; background:#fff;
+          `;
+
+          row.onmouseenter = () => row.style.background = "#f8fafc";
+          row.onmouseleave = () => row.style.background = "#fff";
+          row.onclick = () => onSelect(item);
+
+          const main = document.createElement("div");
+          main.innerHTML = escapeHtml(item.main);
+          main.style.cssText = "font-size:13px;font-weight:800;color:#111827;";
+
+          row.appendChild(main);
+
+          if (item.sub) {
+            const sub = document.createElement("div");
+            sub.innerHTML = escapeHtml(item.sub);
+            sub.style.cssText = "font-size:12px;color:#64748b;";
+            row.appendChild(sub);
+          }
+
+          drop.appendChild(row);
+        });
+
+        drop.style.display = "block";
       };
 
-      const toCsv = (rows) => {
-        if (!rows.length) return "";
-        const cols = ["roleName", "entityName", "permission", "depth", "privilegeName"];
-        const esc = (v) => {
-          const s = String(v ?? "");
-          const need = /[",\n]/.test(s);
-          const out = s.replaceAll('"', '""');
-          return need ? `"${out}"` : out;
-        };
-        return [
-          cols.join(","),
-          ...rows.map(r => cols.map(c => esc(r[c])).join(","))
-        ].join("\n");
+      const filterItems = (items, text) => {
+        const q = String(text || "").trim().toLowerCase();
+        if (!q) return items.slice(0, 80);
+
+        return items.filter(x =>
+          `${x.main} ${x.sub || ""} ${x.search || ""}`.toLowerCase().includes(q)
+        );
       };
 
-      const renderTable = (rows) => {
+      roleInput.addEventListener("input", () => {
+        selectedRole = null;
+        renderDropdown(
+          roleDrop,
+          filterItems(rolesOptions, roleInput.value),
+          item => {
+            selectedRole = item.raw;
+            roleInput.value = `${item.raw.roleName} | ${item.raw.businessUnitName}`;
+            roleDrop.style.display = "none";
+          },
+          "No roles found"
+        );
+      });
+
+      roleInput.addEventListener("focus", () => {
+        renderDropdown(
+          roleDrop,
+          filterItems(rolesOptions, roleInput.value),
+          item => {
+            selectedRole = item.raw;
+            roleInput.value = `${item.raw.roleName} | ${item.raw.businessUnitName}`;
+            roleDrop.style.display = "none";
+          },
+          "No roles found"
+        );
+      });
+
+      entityInput.addEventListener("input", () => {
+        renderDropdown(
+          entityDrop,
+          filterItems(entitiesOptions, entityInput.value),
+          item => {
+            entityInput.value = item.raw.logicalName;
+            entityDrop.style.display = "none";
+          },
+          "No entities found"
+        );
+      });
+
+      entityInput.addEventListener("focus", () => {
+        renderDropdown(
+          entityDrop,
+          filterItems(entitiesOptions, entityInput.value),
+          item => {
+            entityInput.value = item.raw.logicalName;
+            entityDrop.style.display = "none";
+          },
+          "No entities found"
+        );
+      });
+
+      const renderTable = rows => {
         table.innerHTML = "";
 
         const cols = [
           { key: "roleName", label: "Role" },
+          { key: "businessUnitName", label: "Business Unit" },
           { key: "entityName", label: "Entity" },
           { key: "permission", label: "Permission" },
           { key: "depth", label: "Depth" },
@@ -2713,16 +3335,10 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
 
         cols.forEach(c => {
           const th = document.createElement("th");
-          th.innerHTML = escapeHtml(c.label);
+          th.textContent = c.label;
           th.style.cssText = `
-            position: sticky;
-            top: 0;
-            background: #0f172a;
-            color: #fff;
-            padding: 10px 8px;
-            border-bottom: 1px solid rgba(255,255,255,.15);
-            white-space: nowrap;
-            z-index: 1;
+            position:sticky; top:0; background:#0f172a; color:#fff;
+            padding:10px; text-align:left; white-space:nowrap;
           `;
           trh.appendChild(th);
         });
@@ -2737,31 +3353,23 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
           const td = document.createElement("td");
           td.colSpan = cols.length;
           td.textContent = "No permissions found.";
-          td.style.cssText = `
-            padding: 14px 10px;
-            color: #6b7280;
-            text-align: center;
-          `;
+          td.style.cssText = "padding:14px;text-align:center;color:#6b7280;";
           tr.appendChild(td);
           tbody.appendChild(tr);
           table.appendChild(tbody);
           return;
         }
 
-        rows.forEach((row, idx) => {
+        rows.forEach((r, idx) => {
           const tr = document.createElement("tr");
-          tr.style.background = idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+          tr.style.background = idx % 2 ? "#f8fafc" : "#fff";
 
           cols.forEach(c => {
             const td = document.createElement("td");
-            td.innerHTML = escapeHtml(row[c.key] ?? "");
+            td.textContent = r[c.key] || "";
             td.style.cssText = `
-              padding: 8px 8px;
-              border-bottom: 1px solid #e5e7eb;
-              white-space: nowrap;
-              max-width: 380px;
-              overflow: hidden;
-              text-overflow: ellipsis;
+              padding:8px 10px; border-bottom:1px solid #e5e7eb;
+              white-space:nowrap; max-width:420px; overflow:hidden; text-overflow:ellipsis;
             `;
             tr.appendChild(td);
           });
@@ -2772,42 +3380,161 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
         table.appendChild(tbody);
       };
 
-      btnCopyJson.onclick = async () => {
-        await copyText(rawTa.value || "", btnCopyJson, "Copy JSON");
+      const loadOptions = async () => {
+  const Xrm = window.Xrm;
+  const webApi = getWebApi();
+
+  if (!Xrm || !webApi?.retrieveMultipleRecords) {
+    status.textContent = "❌ Xrm.WebApi not found. Open this on a D365 page.";
+    return;
+  }
+
+  try {
+    status.textContent = "⏳ Loading parent BU roles and entities...";
+
+    const buRows = await retrieveAll(
+      "businessunit",
+      "?$select=businessunitid,name,_parentbusinessunitid_value"
+    );
+
+    const parentBu = buRows.find(b => !b._parentbusinessunitid_value);
+
+    if (!parentBu) {
+      status.textContent = "❌ Parent BU not found.";
+      return;
+    }
+
+    const parentBuId = parentBu.businessunitid.replace(/[{}]/g, "");
+
+    const roles = await retrieveAll(
+      "role",
+      `?$select=roleid,name,_businessunitid_value
+       &$filter=_businessunitid_value eq ${parentBuId}
+       &$orderby=name asc`
+    );
+
+    rolesOptions = roles
+      .filter(r => r.name && r.roleid)
+      .map(r => {
+        const buName =
+          r["_businessunitid_value@OData.Community.Display.V1.FormattedValue"] ||
+          parentBu.name ||
+          "";
+
+        const raw = {
+          roleId: r.roleid.replace(/[{}]/g, ""),
+          roleName: r.name,
+          businessUnitName: buName
+        };
+
+        return {
+          main: r.name,
+          sub: buName,
+          search: `${r.name} ${buName}`,
+          raw
+        };
+      });
+
+    const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+
+    const response = await fetch(
+      `${clientUrl}/api/data/v9.2/EntityDefinitions?$select=LogicalName,DisplayName`,
+      {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json; charset=utf-8",
+          "OData-MaxVersion": "4.0",
+          "OData-Version": "4.0",
+          "Prefer": "odata.include-annotations=*"
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    entitiesOptions = (data.value || [])
+      .filter(e => e.LogicalName)
+      .sort((a, b) => a.LogicalName.localeCompare(b.LogicalName))
+      .map(e => {
+        const display =
+          e.DisplayName?.UserLocalizedLabel?.Label ||
+          e.DisplayName?.LocalizedLabels?.[0]?.Label ||
+          "";
+
+        return {
+          main: e.LogicalName,
+          sub: display,
+          search: `${e.LogicalName} ${display}`,
+          raw: { logicalName: e.LogicalName }
+        };
+      });
+
+    status.textContent =
+      `✅ Loaded ${rolesOptions.length} roles from parent BU: ${parentBu.name}, and ${entitiesOptions.length} entities`;
+
+  } catch (err) {
+    console.error(err);
+    status.textContent = "❌ Failed loading options: " + (err?.message || err);
+  }
+};
+
+      const toCsv = rows => {
+        const cols = ["roleName", "businessUnitName", "entityName", "permission", "depth", "privilegeName"];
+        const esc = v => {
+          const s = String(v ?? "");
+          const out = s.replaceAll('"', '""');
+          return /[",\n]/.test(s) ? `"${out}"` : out;
+        };
+        return [cols.join(","), ...rows.map(r => cols.map(c => esc(r[c])).join(","))].join("\n");
       };
 
-      btnCopyCsv.onclick = async () => {
-        await copyText(toCsv(lastRows), btnCopyCsv, "Copy CSV");
+      const copyText = async (text, btnRef, originalText) => {
+        try {
+          await navigator.clipboard.writeText(text || "");
+        } catch {
+          rawTa.value = text || "";
+          rawTa.focus();
+          rawTa.select();
+          document.execCommand("copy");
+        }
+
+        btnRef.textContent = "Copied ✅";
+        setTimeout(() => btnRef.textContent = originalText, 900);
       };
 
       const runGet = async () => {
+        closeDrops();
         status.textContent = "";
-        summary.textContent = "Loading…";
+        summary.textContent = "Loading...";
         rawTa.value = "";
-        renderTable([]);
         lastRows = [];
+        renderTable([]);
 
-        const roleName = (roleInput.value || "").trim();
-        const entityLogicalName = (entityInput.value || "").trim().toLowerCase();
+        if (!selectedRole) {
+          const exact = rolesOptions.find(x =>
+            `${x.raw.roleName} | ${x.raw.businessUnitName}` === roleInput.value
+          );
+          selectedRole = exact?.raw || null;
+        }
 
-        if (!roleName || !entityLogicalName) {
-          status.textContent = "❌ Role name and entity logical name are required.";
-          summary.textContent = "Missing input.";
+        if (!selectedRole) {
+          status.textContent = "❌ Select exact role from the dropdown.";
+          summary.textContent = "Role missing.";
           return;
         }
 
-        const Xrm = window.Xrm;
-        const webApi = Xrm?.WebApi || Xrm?.WebApi?.online;
+        const entityLogicalName = entityInput.value.trim().toLowerCase();
 
-        if (!Xrm || !webApi?.retrieveMultipleRecords) {
-          status.textContent = "❌ Xrm.WebApi.retrieveMultipleRecords not available. Open a D365 page.";
-          summary.textContent = "D365 context not found.";
+        if (!entityLogicalName) {
+          status.textContent = "❌ Entity logical name is required.";
+          summary.textContent = "Entity missing.";
           return;
         }
-
-        status.textContent = "⏳ Loading…";
 
         try {
+          status.textContent = "⏳ Loading permissions...";
+
           const depthMap = {
             0: "None",
             1: "User",
@@ -2816,46 +3543,17 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
             8: "Organization"
           };
 
-          const knownRights = [
-            "Create",
-            "Read",
-            "Write",
-            "Delete",
-            "Append",
-            "AppendTo",
-            "Assign",
-            "Share"
-          ];
+          const rights = ["Create", "Read", "Write", "Delete", "Append", "AppendTo", "Assign", "Share"];
 
-          const clean = (v) => (v || "").replace(/[{}]/g, "").toLowerCase();
-
-          const roleResult = await webApi.retrieveMultipleRecords(
-            "role",
-            `?$select=roleid,name&$filter=name eq '${roleName.replace(/'/g, "''")}'`
-          );
-
-          if (!roleResult.entities.length) {
-            status.textContent = "⚠️ Role not found.";
-            summary.textContent = `Role not found: ${roleName}`;
-            rawTa.value = JSON.stringify([], null, 2);
-            renderTable([]);
-            return;
-          }
-
-          const roleRows = [];
-
-          for (const role of roleResult.entities) {
-            const roleId = clean(role.roleid);
-
-            const fetchXml = `
+          const fetchXml = `
 <fetch distinct="true">
   <entity name="role">
     <attribute name="roleid" />
     <attribute name="name" />
     <filter>
-      <condition attribute="roleid" operator="eq" value="${roleId}" />
+      <condition attribute="roleid" operator="eq" value="${escapeXml(selectedRole.roleId)}" />
     </filter>
-    <link-entity name="roleprivileges" from="roleid" to="roleid" alias="rp" intersect="true">
+    <link-entity name="roleprivileges" from="roleid" to="roleid" intersect="true" alias="rp">
       <attribute name="privilegedepthmask" />
       <link-entity name="privilege" from="privilegeid" to="privilegeid" alias="p">
         <attribute name="name" />
@@ -2864,107 +3562,82 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
   </entity>
 </fetch>`;
 
-            const privilegeResult = await webApi.retrieveMultipleRecords(
-              "role",
-              "?fetchXml=" + encodeURIComponent(fetchXml)
-            );
-
-            const matchedPermissions = [];
-
-            for (const row of privilegeResult.entities) {
-              const privilegeName = row["p.name"];
-              const depthValue = row["rp.privilegedepthmask"];
-
-              if (!privilegeName || depthValue == null) continue;
-
-              const matchedRight = knownRights.find(
-                right => privilegeName.toLowerCase() === `prv${right}${entityLogicalName}`.toLowerCase()
-              );
-
-              if (matchedRight) {
-                matchedPermissions.push({
-                  roleName: role.name,
-                  entityName: entityLogicalName,
-                  permission: matchedRight,
-                  privilegeName,
-                  depthValue,
-                  depthLabel: depthMap[depthValue] || `Unknown (${depthValue})`
-                });
-              }
-            }
-
-            roleRows.push({
-              roleId,
-              roleName: role.name,
-              entityName: entityLogicalName,
-              permissions: matchedPermissions.sort((a, b) => a.permission.localeCompare(b.permission))
-            });
-          }
-
-          const flatRows = roleRows.flatMap(r =>
-            r.permissions.map(p => ({
-              roleName: p.roleName,
-              entityName: p.entityName,
-              permission: p.permission,
-              depth: p.depthLabel,
-              privilegeName: p.privilegeName
-            }))
+          const privilegeResult = await getWebApi().retrieveMultipleRecords(
+            "role",
+            "?fetchXml=" + encodeURIComponent(fetchXml)
           );
 
-          lastRows = flatRows;
-          rawTa.value = JSON.stringify(flatRows, null, 2);
-          renderTable(flatRows);
+          const finalRows = [];
+
+          privilegeResult.entities.forEach(row => {
+            const privilegeName = row["p.name"];
+            const depth = row["rp.privilegedepthmask"];
+            if (!privilegeName) return;
+
+            const matchedRight = rights.find(r =>
+              privilegeName.toLowerCase() === `prv${r}${entityLogicalName}`.toLowerCase()
+            );
+
+            if (!matchedRight) return;
+
+            finalRows.push({
+              roleName: selectedRole.roleName,
+              businessUnitName: selectedRole.businessUnitName,
+              entityName: entityLogicalName,
+              permission: matchedRight,
+              depth: depthMap[depth] || String(depth),
+              privilegeName
+            });
+          });
+
+          finalRows.sort((a, b) => a.permission.localeCompare(b.permission));
+
+          lastRows = finalRows;
+          rawTa.value = JSON.stringify(finalRows, null, 2);
+          renderTable(finalRows);
 
           summary.innerHTML = `
-            <b>Role:</b> ${escapeHtml(roleName)}
-            &nbsp;&nbsp;|&nbsp;&nbsp;
+            <b>Role:</b> ${escapeHtml(selectedRole.roleName)}
+            &nbsp; | &nbsp;
+            <b>BU:</b> ${escapeHtml(selectedRole.businessUnitName)}
+            &nbsp; | &nbsp;
             <b>Entity:</b> ${escapeHtml(entityLogicalName)}
-            &nbsp;&nbsp;|&nbsp;&nbsp;
-            <b>Permissions:</b> ${flatRows.length}
+            &nbsp; | &nbsp;
+            <b>Permissions:</b> ${finalRows.length}
           `;
 
-          status.textContent = flatRows.length
-            ? `✅ Done (${flatRows.length} permissions).`
-            : "⚠️ No permissions found.";
-
-          console.log(`Role: ${roleName}`);
-          console.log(`Entity: ${entityLogicalName}`);
-          console.table(flatRows);
+          status.textContent = finalRows.length ? `✅ Done (${finalRows.length})` : "⚠️ No permissions found.";
         } catch (err) {
-          status.textContent = "❌ Failed.";
+          console.error(err);
+          status.textContent = "❌ Failed";
+          rawTa.value = err?.message || String(err);
           summary.textContent = "Error";
-          rawTa.value =
-            "ERROR:\n" +
-            (err?.message || err?.toString?.() || "Unknown error");
           renderTable([]);
         }
       };
 
+      btnCopyJson.onclick = () => copyText(rawTa.value, btnCopyJson, "Copy JSON");
+      btnCopyCsv.onclick = () => copyText(toCsv(lastRows), btnCopyCsv, "Copy CSV");
       btnRun.onclick = runGet;
 
-      roleInput.addEventListener("keydown", (e) => {
+      roleInput.addEventListener("keydown", e => {
         if (e.key === "Enter") runGet();
+        if (e.key === "Escape") closeDrops();
       });
 
-      entityInput.addEventListener("keydown", (e) => {
+      entityInput.addEventListener("keydown", e => {
         if (e.key === "Enter") runGet();
+        if (e.key === "Escape") closeDrops();
       });
 
-      footer.appendChild(btnClose);
-      footer.appendChild(btnCopyJson);
-      footer.appendChild(btnCopyCsv);
-      footer.appendChild(btnRun);
-
-      box.appendChild(header);
-      box.appendChild(body);
-      box.appendChild(footer);
-      overlay.appendChild(box);
-      document.body.appendChild(overlay);
-
+      renderTable([]);
       roleInput.focus();
+      loadOptions();
     }
   });
 });
+
+
 document.getElementById("getSystemRolesByPrivilege").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
@@ -5287,6 +5960,1150 @@ async function getPrimaryNameField(entityLogicalName) {
       });
 
       clearBtn.addEventListener("click", clearForm);
+    }
+  });
+});
+
+
+
+
+
+document.getElementById("formBeautifier")?.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (!tab?.id) {
+    alert("No active tab found.");
+    return;
+  }
+
+  const frameResults = await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true },
+    world: "MAIN",
+    func: () => {
+      return {
+        hasXrm: !!window.Xrm?.Page?.ui,
+        href: location.href
+      };
+    }
+  });
+
+  const xrmFrame = frameResults.find(r => r.result?.hasXrm);
+
+  if (!xrmFrame) {
+    alert("Could not find Xrm.Page. Open this on a Dynamics 365 form.");
+    return;
+  }
+
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: {
+      tabId: tab.id,
+      frameIds: [xrmFrame.frameId]
+    },
+    world: "MAIN",
+    func: () => {
+      try {
+        const Xrm = window.Xrm;
+
+        if (!Xrm?.Page?.ui?.controls) {
+          return {
+            ok: false,
+            message: "Xrm.Page.ui.controls not found."
+          };
+        }
+
+        const STYLE_ID = "rv-form-beautifier-style";
+
+        if (!document.getElementById(STYLE_ID)) {
+          const style = document.createElement("style");
+          style.id = STYLE_ID;
+          style.textContent = `
+            .rv-beautifier-badge {
+              display: inline-block;
+              margin-inline-start: 6px;
+              padding: 2px 6px;
+              border-radius: 6px;
+              font-size: 11px;
+              font-weight: 600;
+              background: #1f6feb;
+              color: #fff;
+              direction: ltr;
+              vertical-align: middle;
+            }
+
+            .rv-beautifier-required {
+              outline: 2px solid #ff9800 !important;
+              outline-offset: 2px !important;
+            }
+
+            .rv-beautifier-dirty {
+              outline: 2px solid #e91e63 !important;
+              outline-offset: 2px !important;
+            }
+
+            .rv-beautifier-disabled {
+              outline: 2px dashed #9e9e9e !important;
+              outline-offset: 2px !important;
+              opacity: 0.85;
+            }
+
+            .rv-beautifier-hidden-row {
+              border: 1px dashed #607d8b !important;
+              background: rgba(96, 125, 139, 0.15) !important;
+            }
+
+            .rv-beautifier-tooltip {
+              cursor: help;
+            }
+          `;
+
+          document.head.appendChild(style);
+        }
+
+        let totalControls = 0;
+        let decorated = 0;
+        let dirty = 0;
+        let required = 0;
+        let disabled = 0;
+        let hidden = 0;
+
+        Xrm.Page.ui.controls.forEach(control => {
+          try {
+            const name = control.getName?.();
+            const label = control.getLabel?.();
+            const attr = control.getAttribute?.();
+
+            if (!name || !attr) return;
+
+            totalControls++;
+
+            const attrName = attr.getName?.() || name;
+            const value = attr.getValue?.();
+            const type = attr.getAttributeType?.();
+            const requiredLevel = attr.getRequiredLevel?.();
+            const isDirty = attr.getIsDirty?.();
+            const isDisabled = control.getDisabled?.();
+            const isVisible = control.getVisible?.();
+
+            if (isDirty) dirty++;
+            if (requiredLevel === "required") required++;
+            if (isDisabled) disabled++;
+            if (isVisible === false) hidden++;
+
+            const controlEl =
+              document.querySelector(`[data-id="${name}.fieldControl"]`) ||
+              document.querySelector(`[data-id="${name}"]`) ||
+              document.querySelector(`[aria-label="${label}"]`);
+
+            const labelEl =
+              document.querySelector(`[data-id="${name}.fieldControl-label"]`) ||
+              document.querySelector(`label[for*="${name}"]`) ||
+              [...document.querySelectorAll("label, span")]
+                .find(x => x.textContent?.trim() === label);
+
+            if (labelEl && !labelEl.querySelector(".rv-beautifier-badge")) {
+              const badge = document.createElement("span");
+              badge.className = "rv-beautifier-badge";
+              badge.textContent = attrName;
+              badge.title =
+                `Logical: ${attrName}\n` +
+                `Type: ${type}\n` +
+                `Required: ${requiredLevel}\n` +
+                `Dirty: ${isDirty}\n` +
+                `Disabled: ${isDisabled}\n` +
+                `Visible: ${isVisible}\n` +
+                `Value: ${JSON.stringify(value)}`;
+
+              labelEl.appendChild(badge);
+              labelEl.classList.add("rv-beautifier-tooltip");
+              decorated++;
+            }
+
+            if (controlEl) {
+              controlEl.title =
+                `Logical: ${attrName}\n` +
+                `Display: ${label || ""}\n` +
+                `Type: ${type}\n` +
+                `Required: ${requiredLevel}\n` +
+                `Dirty: ${isDirty}\n` +
+                `Disabled: ${isDisabled}\n` +
+                `Visible: ${isVisible}\n` +
+                `Value: ${JSON.stringify(value)}`;
+
+              if (requiredLevel === "required") {
+                controlEl.classList.add("rv-beautifier-required");
+              }
+
+              if (isDirty) {
+                controlEl.classList.add("rv-beautifier-dirty");
+              }
+
+              if (isDisabled) {
+                controlEl.classList.add("rv-beautifier-disabled");
+              }
+
+              if (isVisible === false) {
+                controlEl.classList.add("rv-beautifier-hidden-row");
+              }
+            }
+          } catch (e) {
+            console.warn("Beautifier control error", e);
+          }
+        });
+
+        return {
+          ok: true,
+          totalControls,
+          decorated,
+          dirty,
+          required,
+          disabled,
+          hidden
+        };
+
+      } catch (e) {
+        return {
+          ok: false,
+          message: e.message || String(e)
+        };
+      }
+    }
+  });
+
+  if (result?.ok) {
+    alert(
+      `Form Beautifier applied.\n\n` +
+      `Controls: ${result.totalControls}\n` +
+      `Labels decorated: ${result.decorated}\n` +
+      `Required: ${result.required}\n` +
+      `Dirty: ${result.dirty}\n` +
+      `Disabled: ${result.disabled}\n` +
+      `Hidden: ${result.hidden}`
+    );
+  } else {
+    alert(`Form Beautifier failed:\n${result?.message || "Unknown error"}`);
+  }
+});
+
+
+
+
+
+document.getElementById("ribbonDeepInspector")?.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({
+    active: true,
+    currentWindow: true
+  });
+
+  if (!tab?.id) {
+    alert("No active tab found.");
+    return;
+  }
+
+  const frameResults = await chrome.scripting.executeScript({
+    target: {
+      tabId: tab.id,
+      allFrames: true
+    },
+    world: "MAIN",
+    func: () => ({
+      hasXrm: !!window.Xrm,
+      href: location.href
+    })
+  });
+
+  const targetFrame = frameResults.find(r => r.result?.hasXrm);
+
+  if (!targetFrame) {
+    alert("Could not find Dynamics frame.");
+    return;
+  }
+
+  await chrome.scripting.executeScript({
+    target: {
+      tabId: tab.id,
+      frameIds: [targetFrame.frameId]
+    },
+    world: "MAIN",
+    func: () => {
+      if (window.__rvRibbonDeepInspectorInstalled) {
+        alert("Ribbon Deep Inspector already installed.\n\nHover a ribbon button and press ALT + SHIFT.");
+        return;
+      }
+
+      window.__rvRibbonDeepInspectorInstalled = true;
+
+      let currentHoveredRibbonButton = null;
+
+      showRibbonInspectorHelper();
+
+      async function retrieveEntityRibbonXml(entityName) {
+        const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+
+        const url =
+          `${clientUrl}/api/data/v9.2/RetrieveEntityRibbon` +
+          `(EntityName='${encodeURIComponent(entityName)}',RibbonLocationFilter='All')`;
+
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0"
+          }
+        });
+
+        const text = await response.text();
+
+        if (!response.ok) {
+          throw new Error(text);
+        }
+
+        const json = JSON.parse(text);
+
+        const raw =
+          json.RibbonXml ||
+          json.RibbonXmlString ||
+          json.EntityRibbonXml ||
+          json.CompressedEntityXml ||
+          json.value ||
+          "";
+
+        if (!raw) {
+          throw new Error("Entity Ribbon XML is empty.");
+        }
+
+        return await decodeRibbonXml(raw);
+      }
+
+    async function retrieveApplicationRibbonXml() {
+  if (window.__rvCachedApplicationRibbonXml) {
+    return window.__rvCachedApplicationRibbonXml;
+  }
+
+  const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+
+  const url = `${clientUrl}/api/data/v9.2/RetrieveApplicationRibbon()`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "OData-MaxVersion": "4.0",
+      "OData-Version": "4.0"
+    }
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(text);
+  }
+
+  const json = JSON.parse(text);
+
+  const raw =
+    json.CompressedApplicationRibbonXml ||
+    json.ApplicationRibbonXml ||
+    json.RibbonXml ||
+    json.value ||
+    "";
+
+  if (!raw) {
+    throw new Error("Application Ribbon XML is empty.");
+  }
+
+  const xml = await decodeRibbonXml(raw);
+
+  window.__rvCachedApplicationRibbonXml = xml;
+
+  return xml;
+}
+
+      async function decodeRibbonXml(raw) {
+        if (raw.trim().startsWith("<")) {
+          return raw;
+        }
+
+        const bytes = base64ToBytes(raw);
+
+        // ZIP starts with PK
+        if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
+          return await extractXmlFromZip(bytes);
+        }
+
+        const utf8 = new TextDecoder("utf-8").decode(bytes);
+
+        if (utf8.trim().startsWith("<")) {
+          return utf8;
+        }
+
+        const utf16 = new TextDecoder("utf-16le").decode(bytes);
+
+        if (utf16.trim().startsWith("<")) {
+          return utf16;
+        }
+
+        throw new Error("Could not decode Ribbon XML.");
+      }
+
+      function base64ToBytes(base64) {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+
+        return bytes;
+      }
+
+      async function extractXmlFromZip(bytes) {
+        let offset = 0;
+
+        while (offset < bytes.length - 30) {
+          const signature =
+            bytes[offset] |
+            (bytes[offset + 1] << 8) |
+            (bytes[offset + 2] << 16) |
+            (bytes[offset + 3] << 24);
+
+          if (signature !== 0x04034b50) {
+            offset++;
+            continue;
+          }
+
+          const compressionMethod =
+            bytes[offset + 8] |
+            (bytes[offset + 9] << 8);
+
+          const compressedSize =
+            bytes[offset + 18] |
+            (bytes[offset + 19] << 8) |
+            (bytes[offset + 20] << 16) |
+            (bytes[offset + 21] << 24);
+
+          const fileNameLength =
+            bytes[offset + 26] |
+            (bytes[offset + 27] << 8);
+
+          const extraLength =
+            bytes[offset + 28] |
+            (bytes[offset + 29] << 8);
+
+          const fileNameStart = offset + 30;
+          const fileNameEnd = fileNameStart + fileNameLength;
+
+          const fileName = new TextDecoder("utf-8").decode(
+            bytes.slice(fileNameStart, fileNameEnd)
+          );
+
+          const dataStart = fileNameEnd + extraLength;
+          const dataEnd = dataStart + compressedSize;
+          const fileBytes = bytes.slice(dataStart, dataEnd);
+
+          if (fileName.toLowerCase().endsWith(".xml")) {
+            if (compressionMethod === 0) {
+              return new TextDecoder("utf-8").decode(fileBytes);
+            }
+
+            if (compressionMethod === 8) {
+              return await inflateRaw(fileBytes);
+            }
+
+            throw new Error("Unsupported ZIP compression method: " + compressionMethod);
+          }
+
+          offset = dataEnd;
+        }
+
+        throw new Error("No XML file found inside Ribbon ZIP.");
+      }
+
+      async function inflateRaw(bytes) {
+        for (const format of ["deflate-raw", "deflate"]) {
+          try {
+            const stream = new Blob([bytes])
+              .stream()
+              .pipeThrough(new DecompressionStream(format));
+
+            const text = await new Response(stream).text();
+
+            if (text.trim().startsWith("<")) {
+              return text;
+            }
+          } catch {}
+        }
+
+        throw new Error("Failed to inflate ZIP XML.");
+      }
+
+      function parseXml(xmlText) {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+
+        const parserError = xmlDoc.getElementsByTagName("parsererror")[0];
+
+        if (parserError) {
+          throw new Error(
+            "Failed to parse Ribbon XML.\n\nFirst chars:\n" +
+            xmlText.slice(0, 700)
+          );
+        }
+
+        return xmlDoc;
+      }
+
+      function findExactById(xmlDoc, tagName, id) {
+        if (!xmlDoc || !id) return null;
+
+        return [...xmlDoc.getElementsByTagName(tagName)]
+          .find(x => x.getAttribute("Id") === id);
+      }
+
+      function findContainsById(xmlDoc, tagName, id) {
+        if (!xmlDoc || !id) return null;
+
+        return [...xmlDoc.getElementsByTagName(tagName)]
+          .find(x => {
+            const xmlId = x.getAttribute("Id") || "";
+            return xmlId === id || xmlId.includes(id) || id.includes(xmlId);
+          });
+      }
+
+      function getNodeXml(node) {
+        if (!node) return "";
+        return new XMLSerializer().serializeToString(node);
+      }
+
+     function getRuleIds(commandDef, containerName) {
+  if (!commandDef) return [];
+
+  const container = commandDef.getElementsByTagName(containerName)?.[0];
+
+  if (!container) return [];
+
+  const childTag =
+    containerName === "EnableRules"
+      ? "EnableRule"
+      : "DisplayRule";
+
+  return [...container.getElementsByTagName(childTag)]
+    .map(x => x.getAttribute("Id"))
+    .filter(Boolean);
+}
+
+  function getRuleDetails(xmlDocs, ruleIds, ruleTagName) {
+  const docs = xmlDocs.filter(Boolean);
+
+  return ruleIds.map(id => {
+    let rule = null;
+    let source = "";
+
+    for (const docInfo of docs) {
+      const allRules = [...docInfo.doc.getElementsByTagName(ruleTagName)];
+
+      rule = allRules.find(x => {
+        const ruleId = x.getAttribute("Id") || "";
+        const hasChildren = x.children && x.children.length > 0;
+
+        return ruleId === id && hasChildren;
+      });
+
+      if (rule) {
+        source = docInfo.name;
+        break;
+      }
+    }
+
+    return {
+      id,
+      found: !!rule,
+      source,
+      xml: rule ? getNodeXml(rule) : "Rule definition not found"
+    };
+  });
+}
+
+      function getJavaScriptActions(commandDef) {
+        if (!commandDef) return [];
+
+        return [...commandDef.getElementsByTagName("JavaScriptFunction")]
+          .map(x => ({
+            library:
+              x.getAttribute("Library") ||
+              x.getAttribute("library") ||
+              "",
+            functionName:
+              x.getAttribute("FunctionName") ||
+              x.getAttribute("Function") ||
+              "",
+            parameters: [...x.children].map(p => ({
+              type: p.tagName,
+              value:
+                p.getAttribute("Value") ||
+                p.getAttribute("value") ||
+                p.getAttribute("Name") ||
+                p.getAttribute("name") ||
+                p.getAttribute("Parameter") ||
+                ""
+            }))
+          }));
+      }
+
+      async function resolveRibbon(entityXmlText, clickedInfo) {
+        const entityXmlDoc = parseXml(entityXmlText);
+
+        let appXmlDoc = null;
+        let appXmlError = "";
+
+        try {
+          const appXmlText = await retrieveApplicationRibbonXml();
+          appXmlDoc = parseXml(appXmlText);
+        } catch (e) {
+          appXmlError = e.message || String(e);
+        }
+
+        const buttonId = clickedInfo.buttonId;
+
+        const button =
+          findExactById(entityXmlDoc, "Button", buttonId) ||
+          findContainsById(entityXmlDoc, "Button", buttonId) ||
+          findExactById(entityXmlDoc, "FlyoutAnchor", buttonId) ||
+          findContainsById(entityXmlDoc, "FlyoutAnchor", buttonId) ||
+          findExactById(entityXmlDoc, "SplitButton", buttonId) ||
+          findContainsById(entityXmlDoc, "SplitButton", buttonId) ||
+          findExactById(entityXmlDoc, "MenuItem", buttonId) ||
+          findContainsById(entityXmlDoc, "MenuItem", buttonId);
+
+        const commandId =
+          button?.getAttribute("Command") ||
+          clickedInfo.buttonId ||
+          "";
+
+        const commandDef =
+          findExactById(entityXmlDoc, "CommandDefinition", commandId) ||
+          findContainsById(entityXmlDoc, "CommandDefinition", commandId) ||
+          findExactById(appXmlDoc, "CommandDefinition", commandId) ||
+          findContainsById(appXmlDoc, "CommandDefinition", commandId);
+
+        const enableRuleIds = getRuleIds(commandDef, "EnableRules");
+        const displayRuleIds = getRuleIds(commandDef, "DisplayRules");
+
+        const searchDocs = [
+          { name: "Entity Ribbon", doc: entityXmlDoc },
+          { name: "Application Ribbon", doc: appXmlDoc }
+        ];
+
+        const enableRules = getRuleDetails(
+          searchDocs,
+          enableRuleIds,
+          "EnableRule"
+        );
+
+        const displayRules = getRuleDetails(
+          searchDocs,
+          displayRuleIds,
+          "DisplayRule"
+        );
+
+        return {
+          clicked: clickedInfo,
+          buttonId,
+          commandId,
+          buttonFound: !!button,
+          commandFound: !!commandDef,
+          appRibbonLoaded: !!appXmlDoc,
+          appRibbonError : appXmlError ,
+          buttonXml: getNodeXml(button),
+          commandXml: getNodeXml(commandDef),
+          jsActions: getJavaScriptActions(commandDef),
+          enableRules,
+          displayRules
+        };
+      }
+
+      function findRealRibbonButton(startElement) {
+        const first = startElement.closest(
+          "button,[role='button'],[role='menuitem'],[data-id]"
+        );
+
+        if (!first) return null;
+
+        const candidates = [
+          first,
+          first.closest("[data-id]"),
+          first.parentElement?.closest("[data-id]"),
+          first.parentElement,
+          first.parentElement?.parentElement?.closest("[data-id]")
+        ].filter(Boolean);
+
+        return (
+          candidates.find(x => {
+            const id = x.getAttribute?.("data-id") || x.id || "";
+            return id.includes("|");
+          }) || first
+        );
+      }
+
+      function getClickedInfo(btn) {
+        const dataId = btn.getAttribute("data-id") || btn.id || "";
+        const parts = dataId.split("|");
+
+        return {
+          text:
+            btn.innerText?.trim() ||
+            btn.getAttribute("aria-label") ||
+            btn.getAttribute("title") ||
+            "",
+          dataId,
+          elementId: btn.id || "",
+          entity: parts[0] || "",
+          relationship: parts[1] || "",
+          location: parts[2] || "",
+          buttonId: parts.slice(3).join("|")
+        };
+      }
+
+      function highlightRibbonButton(btn) {
+        removeRibbonHighlight();
+
+        if (!btn) return;
+
+        btn.style.outline = "3px solid #6aa9ff";
+        btn.style.outlineOffset = "2px";
+
+        currentHoveredRibbonButton = btn;
+      }
+
+      function removeRibbonHighlight() {
+        if (currentHoveredRibbonButton) {
+          currentHoveredRibbonButton.style.outline = "";
+          currentHoveredRibbonButton.style.outlineOffset = "";
+        }
+      }
+
+      document.addEventListener(
+        "mouseover",
+        function (e) {
+          const btn = findRealRibbonButton(e.target);
+
+          if (!btn) return;
+
+          const dataId = btn.getAttribute("data-id") || btn.id || "";
+
+          if (!dataId.includes("|")) return;
+
+          highlightRibbonButton(btn);
+        },
+        true
+      );
+
+      document.addEventListener(
+        "keydown",
+        async function (e) {
+          if (!(e.altKey && e.shiftKey)) return;
+
+          if (!currentHoveredRibbonButton) {
+            alert("Hover a ribbon button first, then press ALT + SHIFT.");
+            return;
+          }
+
+          e.preventDefault();
+          e.stopPropagation();
+
+          const clickedInfo = getClickedInfo(currentHoveredRibbonButton);
+
+          if (!clickedInfo.entity || !clickedInfo.buttonId) {
+            alert("Could not resolve ribbon button.");
+            return;
+          }
+
+          showLoadingPopup(clickedInfo);
+
+          try {
+            const entityXml = await retrieveEntityRibbonXml(clickedInfo.entity);
+            const resolved = await resolveRibbon(entityXml, clickedInfo);
+            showPopup(resolved);
+          } catch (err) {
+            removePopup();
+
+            alert(
+              "Failed to resolve ribbon.\n\n" +
+              (err.message || String(err))
+            );
+          }
+        },
+        true
+      );
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function removePopup() {
+        document.getElementById("rv-ribbon-inspector-popup")?.remove();
+      }
+
+      function injectStyle() {
+        if (document.getElementById("rv-ribbon-inspector-style")) return;
+
+        const style = document.createElement("style");
+        style.id = "rv-ribbon-inspector-style";
+
+        style.textContent = `
+          #rv-ribbon-inspector-popup {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            width: 780px;
+            max-width: calc(100vw - 32px);
+            max-height: calc(100vh - 32px);
+            overflow-y: auto;
+            background: #1f1f1f;
+            color: white;
+            z-index: 999999999;
+            border: 1px solid #444;
+            border-radius: 14px;
+            box-shadow: 0 12px 40px rgba(0,0,0,.55);
+            font-family: Arial, sans-serif;
+            direction: rtl;
+          }
+
+          .rv-head {
+            position: sticky;
+            top: 0;
+            background: #1f1f1f;
+            padding: 14px 16px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 2;
+          }
+
+          .rv-head h2 {
+            margin: 0;
+            font-size: 18px;
+          }
+
+          .rv-close {
+            background: transparent;
+            border: 0;
+            color: white;
+            font-size: 26px;
+            cursor: pointer;
+          }
+
+          .rv-body {
+            padding: 14px 16px;
+          }
+
+          .rv-section {
+            color: #6aa9ff;
+            font-weight: bold;
+            margin: 18px 0 8px;
+            font-size: 15px;
+          }
+
+          .rv-label {
+            color: #8cc8ff;
+            direction: rtl;
+            text-align: right;
+            font-size: 12px;
+            margin: 8px 0 4px;
+          }
+
+          .rv-box {
+            background: #2a2a2a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 10px;
+            direction: ltr;
+            text-align: left;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 12px;
+          }
+
+          .rv-empty {
+            color: #aaa;
+          }
+
+          .rv-ok {
+            color: #4caf50;
+            font-weight: bold;
+          }
+
+          .rv-bad {
+            color: #ff6b6b;
+            font-weight: bold;
+          }
+
+          .rv-source {
+            color: #ffd36a;
+            font-size: 11px;
+            margin-inline-start: 8px;
+          }
+
+          .rv-actions {
+            position: sticky;
+            bottom: 0;
+            background: #1f1f1f;
+            border-top: 1px solid #333;
+            display: flex;
+            gap: 8px;
+            padding: 12px 16px;
+          }
+
+          .rv-btn {
+            flex: 1;
+            background: #6aa9ff;
+            color: #000;
+            border: 0;
+            border-radius: 8px;
+            padding: 10px;
+            font-weight: bold;
+            cursor: pointer;
+          }
+
+          .rv-btn-secondary {
+            background: #444;
+            color: white;
+          }
+        `;
+
+        document.head.appendChild(style);
+      }
+
+      function showLoadingPopup(clickedInfo) {
+        removePopup();
+        injectStyle();
+
+        const popup = document.createElement("div");
+        popup.id = "rv-ribbon-inspector-popup";
+
+        popup.innerHTML = `
+          <div class="rv-head">
+            <h2>🎀 Ribbon Deep Inspector</h2>
+            <button id="rv-ribbon-inspector-close" class="rv-close">×</button>
+          </div>
+
+          <div class="rv-body">
+            <div class="rv-section">Loading...</div>
+            <div class="rv-box">Reading Ribbon XML for entity: ${escapeHtml(clickedInfo.entity)}</div>
+            <div class="rv-box">Also loading Application Ribbon rules...</div>
+          </div>
+        `;
+
+        document.body.appendChild(popup);
+
+        document.getElementById("rv-ribbon-inspector-close").onclick = removePopup;
+      }
+
+      function renderJsActions(actions) {
+        if (!actions.length) {
+          return `<div class="rv-box rv-empty">No JavaScriptFunction found.</div>`;
+        }
+
+        return actions.map(a => `
+          <div class="rv-box">
+Library: ${escapeHtml(a.library)}
+Function: ${escapeHtml(a.functionName)}
+Parameters:
+${escapeHtml(JSON.stringify(a.parameters, null, 2))}
+          </div>
+        `).join("");
+      }
+
+      function renderRules(rules) {
+        if (!rules.length) {
+          return `<div class="rv-box rv-empty">No rules found.</div>`;
+        }
+
+        return rules.map(r => `
+          <div class="rv-label">
+            ${escapeHtml(r.id)}
+            ${r.found ? "<span class='rv-ok'> found</span>" : "<span class='rv-bad'> not found</span>"}
+            ${r.source ? `<span class="rv-source">${escapeHtml(r.source)}</span>` : ""}
+          </div>
+          <div class="rv-box">${escapeHtml(r.xml || "Rule XML not found")}</div>
+        `).join("");
+      }
+
+      function showPopup(data) {
+        removePopup();
+        injectStyle();
+
+        const popup = document.createElement("div");
+        popup.id = "rv-ribbon-inspector-popup";
+
+        popup.innerHTML = `
+          <div class="rv-head">
+            <h2>🎀 Ribbon Deep Inspector</h2>
+            <button id="rv-ribbon-inspector-close" class="rv-close">×</button>
+          </div>
+
+          <div class="rv-body">
+            <div class="rv-section">Clicked Button</div>
+
+            <div class="rv-label">Text</div>
+            <div class="rv-box">${escapeHtml(data.clicked.text)}</div>
+
+            <div class="rv-label">Entity</div>
+            <div class="rv-box">${escapeHtml(data.clicked.entity)}</div>
+
+            <div class="rv-label">Button Id</div>
+            <div class="rv-box">${escapeHtml(data.buttonId)}</div>
+
+            <div class="rv-label">Command Id</div>
+            <div class="rv-box">${escapeHtml(data.commandId)}</div>
+
+            <div class="rv-label">Button Found</div>
+            <div class="rv-box">${data.buttonFound ? "<span class='rv-ok'>true</span>" : "<span class='rv-bad'>false</span>"}</div>
+
+            <div class="rv-label">Command Found</div>
+            <div class="rv-box">${data.commandFound ? "<span class='rv-ok'>true</span>" : "<span class='rv-bad'>false</span>"}</div>
+
+            <div class="rv-label">Application Ribbon Loaded</div>
+            <div class="rv-box">${data.appRibbonLoaded ? "<span class='rv-ok'>true</span>" : "<span class='rv-bad'>false</span>"}</div>
+
+            ${
+              data.appRibbonError
+                ? `
+                  <div class="rv-label">Application Ribbon Error</div>
+                  <div class="rv-box">${escapeHtml(data.appRibbonError)}</div>
+                `
+                : ""
+            }
+
+            <div class="rv-section">JavaScript Functions</div>
+            ${renderJsActions(data.jsActions)}
+
+            <div class="rv-section">Enable Rules</div>
+            ${renderRules(data.enableRules)}
+
+            <div class="rv-section">Display Rules</div>
+            ${renderRules(data.displayRules)}
+
+            <div class="rv-section">Command XML</div>
+            <div class="rv-box">${escapeHtml(data.commandXml || "Not found")}</div>
+
+            <div class="rv-section">Button XML</div>
+            <div class="rv-box">${escapeHtml(data.buttonXml || "Not found")}</div>
+          </div>
+
+          <div class="rv-actions">
+            <button id="rv-ribbon-copy-json" class="rv-btn">Copy JSON</button>
+            <button id="rv-ribbon-copy-command" class="rv-btn">Copy Command</button>
+            <button id="rv-ribbon-close2" class="rv-btn rv-btn-secondary">Close</button>
+          </div>
+        `;
+
+        document.body.appendChild(popup);
+
+        document.getElementById("rv-ribbon-inspector-close").onclick = removePopup;
+        document.getElementById("rv-ribbon-close2").onclick = removePopup;
+
+        document.getElementById("rv-ribbon-copy-json").onclick = async () => {
+          await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+          alert("Copied JSON");
+        };
+
+        document.getElementById("rv-ribbon-copy-command").onclick = async () => {
+          await navigator.clipboard.writeText(data.commandId || data.buttonId || "");
+          alert("Copied Command");
+        };
+      }
+
+      function showRibbonInspectorHelper() {
+        document.getElementById("rv-ribbon-helper")?.remove();
+        document.getElementById("rv-ribbon-helper-style")?.remove();
+
+        const style = document.createElement("style");
+        style.id = "rv-ribbon-helper-style";
+
+        style.textContent = `
+          #rv-ribbon-helper {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            z-index: 999999999;
+            background: #1f1f1f;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 12px;
+            padding: 12px 14px;
+            font-family: Arial, sans-serif;
+            box-shadow: 0 10px 30px rgba(0,0,0,.45);
+            direction: ltr;
+            user-select: none;
+            transition: all .2s ease;
+          }
+
+          #rv-ribbon-helper:hover {
+            opacity: 1 !important;
+            transform: scale(1.03);
+          }
+
+          .rv-ribbon-helper-title {
+            font-weight: bold;
+            margin-bottom: 6px;
+            color: #6aa9ff;
+            font-size: 14px;
+          }
+
+          .rv-ribbon-helper-text {
+            font-size: 12px;
+            color: #ccc;
+            line-height: 1.5;
+          }
+
+          .rv-ribbon-helper-hotkey {
+            margin-top: 10px;
+            background: #6aa9ff;
+            color: black;
+            font-weight: bold;
+            text-align: center;
+            padding: 8px;
+            border-radius: 8px;
+            font-size: 14px;
+          }
+        `;
+
+        document.head.appendChild(style);
+
+        const helper = document.createElement("div");
+        helper.id = "rv-ribbon-helper";
+
+        helper.innerHTML = `
+          <div class="rv-ribbon-helper-title">🎀 Ribbon Deep Inspector</div>
+          <div class="rv-ribbon-helper-text">
+            Hover ribbon button<br>
+            then press
+          </div>
+          <div class="rv-ribbon-helper-hotkey">ALT + SHIFT</div>
+        `;
+
+        document.body.appendChild(helper);
+
+        setTimeout(() => {
+          helper.style.opacity = "0.15";
+        }, 10000);
+
+        helper.addEventListener("mouseenter", () => {
+          helper.style.opacity = "1";
+        });
+
+        helper.addEventListener("mouseleave", () => {
+          helper.style.opacity = "0.15";
+        });
+      }
     }
   });
 });
