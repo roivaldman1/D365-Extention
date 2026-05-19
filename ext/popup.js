@@ -7377,10 +7377,10 @@ document.getElementById("whyDidThisHappenUi").addEventListener("click", async ()
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true },
+    target: { tabId: tab.id, allFrames: false },
     world: "MAIN",
     func: () => {
-
+        if (window.top !== window.self) return;
       if (window.__whyRecorderModalOpen) {
         window.__whyRecorderShow?.();
         return;
