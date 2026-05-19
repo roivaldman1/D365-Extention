@@ -7107,3 +7107,718 @@ ${escapeHtml(JSON.stringify(a.parameters, null, 2))}
     }
   });
 });
+
+
+document.getElementById("openRecordByGuidUi").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: () => {
+      document.getElementById("__d365_guid_resolver_modal")?.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365_guid_resolver_modal";
+      overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.35);
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        direction: ltr;
+      `;
+
+      const box = document.createElement("div");
+      box.style.cssText = `
+        width: min(760px, 96vw);
+        background: #fff;
+        border-radius: 14px;
+        box-shadow: 0 18px 50px rgba(0,0,0,.35);
+        overflow: hidden;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      `;
+
+      const header = document.createElement("div");
+      header.style.cssText = `
+        padding: 14px 16px;
+        font-weight: 800;
+        border-bottom: 1px solid #e5e7eb;
+        font-size: 15px;
+      `;
+      header.textContent = "Open Record By Any GUID";
+
+      const body = document.createElement("div");
+      body.style.cssText = `padding: 16px;`;
+
+      const input = document.createElement("input");
+      input.placeholder = "Paste GUID here...";
+      input.style.cssText = `
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 12px;
+        font-size: 14px;
+        direction: ltr;
+        text-align: left;
+        font-family: Consolas, Monaco, 'Courier New', monospace;
+      `;
+
+      const result = document.createElement("div");
+      result.style.cssText = `
+        margin-top: 12px;
+        min-height: 120px;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        background: #f8fafc;
+        padding: 12px;
+        white-space: pre-wrap;
+        font-family: Consolas, Monaco, 'Courier New', monospace;
+        font-size: 12px;
+        color: #0f172a;
+      `;
+      result.textContent = "Paste GUID and click Resolve.";
+
+      const footer = document.createElement("div");
+      footer.style.cssText = `
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        padding: 12px 16px;
+        border-top: 1px solid #e5e7eb;
+      `;
+
+      const makeBtn = (text, bg, color = "#fff") => {
+        const btn = document.createElement("button");
+        btn.textContent = text;
+        btn.style.cssText = `
+          border: ${bg === "#fff" ? "1px solid #cbd5e1" : "none"};
+          padding: 10px 14px;
+          border-radius: 10px;
+          cursor: pointer;
+          background: ${bg};
+          color: ${color};
+          font-weight: 800;
+        `;
+        return btn;
+      };
+
+      const btnClose = makeBtn("Close", "#fff", "#111827");
+      const btnResolve = makeBtn("Resolve", "#2563eb");
+      const btnOpen = makeBtn("Open Record", "#16a34a");
+      btnOpen.style.display = "none";
+
+      let found = null;
+
+      const cleanGuid = (value) => {
+        const m = String(value || "").match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
+        return m ? m[0].toLowerCase() : null;
+      };
+
+      async function getJson(url) {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Accept": "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Prefer": 'odata.include-annotations="*"'
+          }
+        });
+
+        if (!res.ok) return null;
+        return await res.json();
+      }
+
+      async function resolveGuid(guid) {
+        const Xrm = window.Xrm;
+        const clientUrl = Xrm?.Utility?.getGlobalContext?.().getClientUrl?.();
+
+        if (!clientUrl) {
+          throw new Error("Xrm context not found. Open this inside D365.");
+        }
+
+        result.textContent = "Loading entity metadata...";
+
+        const metaUrl =
+          `${clientUrl}/api/data/v9.2/EntityDefinitions` +
+          `?$select=LogicalName,EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute` +
+          `&$filter=IsPrivate eq false`;
+
+        const meta = await getJson(metaUrl);
+        const entities = (meta?.value || [])
+          .filter(e => e.EntitySetName && e.PrimaryIdAttribute)
+          .sort((a, b) => a.LogicalName.localeCompare(b.LogicalName));
+
+        result.textContent = `Scanning ${entities.length} entities...\nGUID: ${guid}`;
+
+        const concurrency = 12;
+        let index = 0;
+        let checked = 0;
+
+        async function worker() {
+          while (index < entities.length && !found) {
+            const e = entities[index++];
+            checked++;
+
+            if (checked % 25 === 0) {
+              result.textContent = `Scanning entities...\nChecked: ${checked}/${entities.length}\nGUID: ${guid}`;
+            }
+
+            const select = e.PrimaryNameAttribute
+              ? `${e.PrimaryIdAttribute},${e.PrimaryNameAttribute}`
+              : `${e.PrimaryIdAttribute}`;
+
+            const url = `${clientUrl}/api/data/v9.2/${e.EntitySetName}(${guid})?$select=${select}`;
+            const data = await getJson(url);
+
+            if (data && data[e.PrimaryIdAttribute]) {
+              found = {
+                guid,
+                entityName: e.LogicalName,
+                entitySetName: e.EntitySetName,
+                primaryId: e.PrimaryIdAttribute,
+                primaryNameAttr: e.PrimaryNameAttribute,
+                primaryName: e.PrimaryNameAttribute ? data[e.PrimaryNameAttribute] : ""
+              };
+              return;
+            }
+          }
+        }
+
+        await Promise.all(Array.from({ length: concurrency }, worker));
+
+        return found;
+      }
+
+      btnResolve.onclick = async () => {
+        try {
+          found = null;
+          btnOpen.style.display = "none";
+
+          const guid = cleanGuid(input.value);
+
+          if (!guid) {
+            result.textContent = "Invalid GUID.";
+            return;
+          }
+
+          btnResolve.disabled = true;
+          btnResolve.textContent = "Resolving...";
+
+          const r = await resolveGuid(guid);
+
+          if (!r) {
+            result.textContent = `Not found.\nGUID: ${guid}`;
+            return;
+          }
+
+          result.textContent =
+            `FOUND ✅\n\n` +
+            `Entity: ${r.entityName}\n` +
+            `EntitySet: ${r.entitySetName}\n` +
+            `Primary ID: ${r.primaryId}\n` +
+            `Primary Name Field: ${r.primaryNameAttr || "-"}\n` +
+            `Name: ${r.primaryName || "-"}\n` +
+            `GUID: ${r.guid}`;
+
+          btnOpen.style.display = "";
+        } catch (e) {
+          result.textContent = "Error:\n" + (e?.message || String(e));
+        } finally {
+          btnResolve.disabled = false;
+          btnResolve.textContent = "Resolve";
+        }
+      };
+
+      btnOpen.onclick = async () => {
+        if (!found) return;
+
+        await window.Xrm.Navigation.openForm({
+          entityName: found.entityName,
+          entityId: found.guid
+        });
+      };
+
+      btnClose.onclick = () => overlay.remove();
+
+      footer.appendChild(btnClose);
+      footer.appendChild(btnResolve);
+      footer.appendChild(btnOpen);
+
+      body.appendChild(input);
+      body.appendChild(result);
+
+      box.appendChild(header);
+      box.appendChild(body);
+      box.appendChild(footer);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      input.focus();
+    }
+  });
+});
+
+
+
+document.getElementById("whyDidThisHappenUi").addEventListener("click", async () => {
+
+  const [tab] = await chrome.tabs.query({
+    active: true,
+    currentWindow: true
+  });
+
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true },
+    world: "MAIN",
+    func: () => {
+
+      if (window.__whyRecorderModalOpen) {
+        window.__whyRecorderShow?.();
+        return;
+      }
+
+      window.__whyRecorderModalOpen = true;
+
+      window.__whyRecorderLogs ??= [];
+      window.__whyRecorderRecording ??= false;
+
+      const logs = window.__whyRecorderLogs;
+
+      function safe(v) {
+        try {
+          if (v === undefined) return "undefined";
+          if (v === null) return "null";
+          if (typeof v === "string") return v.slice(0, 800);
+          if (typeof v === "object") return JSON.stringify(v).slice(0, 1000);
+          return String(v);
+        } catch {
+          return "[unserializable]";
+        }
+      }
+
+     function stack() {
+  return (new Error().stack || "")
+    .split("\n")
+    .slice(2, 18)
+    .join("\n");
+}
+
+function extractCaller(stackText) {
+  if (!stackText) return "";
+
+  const skipFiles = [
+    "content.powerapps.com",
+    "ey_Elad.Global.Loader.js",
+    "Main_system_library.js",
+    "<anonymous>"
+  ];
+
+  const lines = stackText.split("\n");
+
+  const crmLines = lines.filter(l =>
+    l.includes("/webresources/")
+  );
+
+  const preferredLine =
+    crmLines.find(l => !skipFiles.some(skip => l.includes(skip))) ||
+    crmLines[0];
+
+  if (!preferredLine) return "";
+
+  const fnMatch = preferredLine.match(/at\s+(.+?)\s+\(/);
+  const fileMatch = preferredLine.match(/\/webresources\/([^:]+):(\d+):(\d+)/);
+
+  const fn = fnMatch?.[1]?.trim() || "anonymous";
+  const file = fileMatch?.[1] || "";
+  const line = fileMatch?.[2] || "";
+
+  return `${fn} (${file}:${line})`;
+}
+
+      function addLog(type, data = {}) {
+
+        if (!window.__whyRecorderRecording)
+          return;
+
+        logs.push({
+          time: new Date().toLocaleTimeString(),
+          type,
+          ...data,
+          stack: stack()
+        });
+
+        if (logs.length > 1000)
+          logs.shift();
+
+        render();
+      }
+
+      function wrap(obj, method, label, parser) {
+
+        if (!obj || typeof obj[method] !== "function")
+          return;
+
+        if (obj[method].__whyWrapped)
+          return;
+
+        const original = obj[method];
+
+        obj[method] = function (...args) {
+
+          try {
+
+            addLog(
+              label,
+              parser ? parser(args, this) : {}
+            );
+
+          } catch {}
+
+          return original.apply(this, args);
+        };
+
+        obj[method].__whyWrapped = true;
+      }
+
+      function installHooks() {
+
+        if (window.__whyHooksInstalled)
+          return;
+
+        window.__whyHooksInstalled = true;
+
+        const Xrm = window.Xrm;
+        const page = Xrm?.Page;
+
+        if (!page)
+          return;
+
+        try {
+
+          page.data.entity.attributes.forEach(attr => {
+
+            wrap(attr, "setValue", "setValue", (args, ctx) => ({
+              attribute: ctx.getName?.(),
+              newValue: safe(args[0])
+            }));
+
+            wrap(attr, "fireOnChange", "fireOnChange", (args, ctx) => ({
+              attribute: ctx.getName?.()
+            }));
+
+          });
+
+        } catch {}
+
+        try {
+
+          page.ui.controls.forEach(ctrl => {
+
+            wrap(ctrl, "setVisible", "setVisible", (args, ctx) => ({
+              control: ctx.getName?.(),
+              visible: args[0]
+            }));
+
+            wrap(ctrl, "setDisabled", "setDisabled", (args, ctx) => ({
+              control: ctx.getName?.(),
+              disabled: args[0]
+            }));
+
+            wrap(ctrl, "setNotification", "setNotification", (args, ctx) => ({
+              control: ctx.getName?.(),
+              message: args[0]
+            }));
+
+            wrap(ctrl, "clearNotification", "clearNotification", (args, ctx) => ({
+              control: ctx.getName?.()
+            }));
+
+          });
+
+        } catch {}
+
+        try {
+
+          wrap(Xrm.WebApi, "retrieveMultipleRecords", "retrieveMultipleRecords", (args) => ({
+            entity: args[0],
+            options: safe(args[1])
+          }));
+
+        } catch {}
+
+        try {
+
+          page.data.entity.addOnSave((executionContext) => {
+
+            const args = executionContext.getEventArgs?.();
+
+            addLog("OnSave", {
+              saveMode: args?.getSaveMode?.(),
+              prevented: args?.isDefaultPrevented?.()
+            });
+
+          });
+
+        } catch {}
+      }
+
+      function buildWhy(field) {
+
+        const lower = field.toLowerCase();
+
+        const relevant = logs.filter(x => {
+
+          const attr = String(x.attribute || "").toLowerCase();
+          const control = String(x.control || "").toLowerCase();
+
+          return (
+            attr.includes(lower) ||
+            control.includes(lower)
+          );
+        });
+
+        if (!relevant.length) {
+          return `No events found for: ${field}`;
+        }
+
+        let text = `WHY DID THIS HAPPEN?\n`;
+        text += `====================\n\n`;
+        text += `Target: ${field}\n\n`;
+
+        relevant.forEach((x, i) => {
+
+          text += `#${i + 1}\n`;
+          text += `Type: ${x.type}\n`;
+
+          if (x.attribute)
+            text += `Attribute: ${x.attribute}\n`;
+
+          if (x.control)
+            text += `Control: ${x.control}\n`;
+
+          if (x.visible !== undefined)
+            text += `Visible: ${x.visible}\n`;
+
+          if (x.disabled !== undefined)
+            text += `Disabled: ${x.disabled}\n`;
+
+          if (x.newValue !== undefined)
+            text += `New Value: ${x.newValue}\n`;
+
+          if (x.message)
+            text += `Message: ${x.message}\n`;
+
+          const caller = extractCaller(x.stack);
+
+          if (caller)
+            text += `Caller: ${caller}\n`;
+
+          text += `\n`;
+        });
+
+        return text;
+      }
+
+      function render() {
+
+        const ta = document.getElementById("__whyRecorderText");
+        const status = document.getElementById("__whyRecorderStatus");
+
+        if (!ta || !status)
+          return;
+
+        status.textContent =
+          window.__whyRecorderRecording
+            ? `🔴 Recording (${logs.length})`
+            : `⚪ Idle`;
+
+        ta.value =
+          logs.map((x, i) => {
+
+            const caller = extractCaller(x.stack);
+
+            return [
+              `#${i + 1}`,
+              `[${x.time}] ${x.type}`,
+              x.attribute ? `attribute: ${x.attribute}` : "",
+              x.control ? `control: ${x.control}` : "",
+              x.visible !== undefined ? `visible: ${x.visible}` : "",
+              x.disabled !== undefined ? `disabled: ${x.disabled}` : "",
+              x.newValue !== undefined ? `newValue: ${x.newValue}` : "",
+              caller ? `caller: ${caller}` : ""
+            ]
+              .filter(Boolean)
+              .join("\n");
+
+          }).join("\n\n");
+
+        ta.scrollTop = ta.scrollHeight;
+      }
+
+      function showModal() {
+
+        document.getElementById("__whyRecorderModal")?.remove();
+
+        const overlay = document.createElement("div");
+
+        overlay.id = "__whyRecorderModal";
+
+        overlay.style.cssText = `
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,.35);
+          z-index: 2147483647;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 16px;
+        `;
+
+        const box = document.createElement("div");
+
+        box.style.cssText = `
+          width: min(1100px, 98vw);
+          height: min(760px, 92vh);
+          background: white;
+          border-radius: 14px;
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+          font-family: system-ui;
+        `;
+
+        const header = document.createElement("div");
+
+        header.style.cssText = `
+          padding: 12px 14px;
+          border-bottom: 1px solid #ddd;
+          font-weight: 700;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        `;
+
+        header.innerHTML = `
+          <span>❓ Why Did This Happen</span>
+          <span id="__whyRecorderStatus"></span>
+        `;
+
+        const toolbar = document.createElement("div");
+
+        toolbar.style.cssText = `
+          display:flex;
+          gap:8px;
+          padding:10px;
+          border-bottom:1px solid #ddd;
+          flex-wrap:wrap;
+        `;
+
+        function btn(text, color) {
+
+          const b = document.createElement("button");
+
+          b.textContent = text;
+
+          b.style.cssText = `
+            border:none;
+            background:${color};
+            color:white;
+            padding:10px 14px;
+            border-radius:10px;
+            cursor:pointer;
+            font-weight:700;
+          `;
+
+          return b;
+        }
+
+        const startBtn = btn("🎥 Start Recording", "#16a34a");
+        const stopBtn = btn("⏹ Stop Recording", "#dc2626");
+        const whyBtn = btn("❓ Analyze Field", "#2563eb");
+        const clearBtn = btn("🧹 Clear", "#f97316");
+        const closeBtn = btn("Close", "#64748b");
+
+        const ta = document.createElement("textarea");
+
+        ta.id = "__whyRecorderText";
+
+        ta.style.cssText = `
+          flex:1;
+          width:100%;
+          border:none;
+          resize:none;
+          outline:none;
+          padding:12px;
+          box-sizing:border-box;
+          font-family:Consolas;
+          font-size:12px;
+          white-space:pre;
+        `;
+
+        startBtn.onclick = () => {
+          window.__whyRecorderRecording = true;
+          render();
+        };
+
+        stopBtn.onclick = () => {
+          window.__whyRecorderRecording = false;
+          render();
+        };
+
+        clearBtn.onclick = () => {
+          logs.length = 0;
+          render();
+        };
+
+        whyBtn.onclick = () => {
+
+          const field = prompt(
+            "Enter field/control logical name\nExample: ey_contactid"
+          );
+
+          if (!field)
+            return;
+
+          ta.value = buildWhy(field);
+          ta.scrollTop = 0;
+        };
+
+        closeBtn.onclick = () => {
+          overlay.remove();
+        };
+
+        toolbar.appendChild(startBtn);
+        toolbar.appendChild(stopBtn);
+        toolbar.appendChild(whyBtn);
+        toolbar.appendChild(clearBtn);
+        toolbar.appendChild(closeBtn);
+
+        box.appendChild(header);
+        box.appendChild(toolbar);
+        box.appendChild(ta);
+
+        overlay.appendChild(box);
+
+        document.body.appendChild(overlay);
+
+        render();
+      }
+
+      installHooks();
+
+      window.__whyRecorderShow = showModal;
+
+      showModal();
+    }
+  });
+});
+
