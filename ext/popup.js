@@ -7365,262 +7365,531 @@ document.getElementById("openRecordByGuidUi").addEventListener("click", async ()
   });
 });
 
-
-
 document.getElementById("whyDidThisHappenUi").addEventListener("click", async () => {
-
-  const [tab] = await chrome.tabs.query({
-    active: true,
-    currentWindow: true
-  });
-
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: false },
+    target: { tabId: tab.id, allFrames: true },
     world: "MAIN",
     func: () => {
-        if (window.top !== window.self) return;
-      if (window.__whyRecorderModalOpen) {
-        window.__whyRecorderShow?.();
-        return;
-      }
-
-      window.__whyRecorderModalOpen = true;
-
-      window.__whyRecorderLogs ??= [];
-      window.__whyRecorderRecording ??= false;
-
-      const logs = window.__whyRecorderLogs;
+      const store = window.top.__whyRecorderStore ||= {
+        logs: [],
+        recording: false
+      };
 
       function safe(v) {
         try {
           if (v === undefined) return "undefined";
           if (v === null) return "null";
-          if (typeof v === "string") return v.slice(0, 800);
-          if (typeof v === "object") return JSON.stringify(v).slice(0, 1000);
-          return String(v);
+          if (typeof v === "string") return v.slice(0, 1500);
+          if (typeof v === "number" || typeof v === "boolean") return String(v);
+          if (v instanceof Date) return v.toISOString();
+          if (Array.isArray(v)) return `[Array ${v.length}]`;
+          if (typeof v === "function") return `[Function ${v.name || "anonymous"}]`;
+          if (typeof v === "object") return JSON.stringify(v).slice(0, 2000);
+          return String(v).slice(0, 1500);
         } catch {
           return "[unserializable]";
         }
       }
 
-     function stack() {
-  return (new Error().stack || "")
-    .split("\n")
-    .slice(2, 18)
-    .join("\n");
-}
+      function stack() {
+        return (new Error().stack || "")
+          .split("\n")
+          .slice(2, 22)
+          .join("\n");
+      }
 
-function extractCaller(stackText) {
-  if (!stackText) return "";
+      function shouldIgnore(type, data = {}) {
+        const ignoredPatterns = [
+          "events.data.microsoft.com",
+          "aria.microsoft.com",
+          "OneCollector",
+          "Collector/3.0",
+          "browser.pipe",
+          "measure.office.com",
+          "upload.fp.measure.office.com",
+          "setImmediate$",
+          "trans.gif",
+          "__whyRecorder"
+        ];
 
-  const skipFiles = [
-    "content.powerapps.com",
-    "ey_Elad.Global.Loader.js",
-    "Main_system_library.js",
-    "<anonymous>"
-  ];
-
-  const lines = stackText.split("\n");
-
-  const crmLines = lines.filter(l =>
-    l.includes("/webresources/")
-  );
-
-  const preferredLine =
-    crmLines.find(l => !skipFiles.some(skip => l.includes(skip))) ||
-    crmLines[0];
-
-  if (!preferredLine) return "";
-
-  const fnMatch = preferredLine.match(/at\s+(.+?)\s+\(/);
-  const fileMatch = preferredLine.match(/\/webresources\/([^:]+):(\d+):(\d+)/);
-
-  const fn = fnMatch?.[1]?.trim() || "anonymous";
-  const file = fileMatch?.[1] || "";
-  const line = fileMatch?.[2] || "";
-
-  return `${fn} (${file}:${line})`;
-}
+        const combined = `${type} ${JSON.stringify(data || {})}`;
+        return ignoredPatterns.some((x) => combined.includes(x));
+      }
 
       function addLog(type, data = {}) {
+        if (!store.recording) return;
+        if (shouldIgnore(type, data)) return;
 
-        if (!window.__whyRecorderRecording)
-          return;
-
-        logs.push({
+        store.logs.push({
           time: new Date().toLocaleTimeString(),
+          frameUrl: location.href,
           type,
           ...data,
           stack: stack()
         });
 
-        if (logs.length > 1000)
-          logs.shift();
+        if (store.logs.length > 2000) store.logs.shift();
 
-        render();
+        try {
+          window.top.__whyRecorderRender?.();
+        } catch {}
       }
 
       function wrap(obj, method, label, parser) {
-
-        if (!obj || typeof obj[method] !== "function")
-          return;
-
-        if (obj[method].__whyWrapped)
-          return;
+        if (!obj || typeof obj[method] !== "function") return;
+        if (obj[method].__whyWrapped) return;
 
         const original = obj[method];
 
         obj[method] = function (...args) {
-
           try {
-
-            addLog(
-              label,
-              parser ? parser(args, this) : {}
-            );
-
+            addLog(label, parser ? parser(args, this) : {});
           } catch {}
 
           return original.apply(this, args);
         };
 
         obj[method].__whyWrapped = true;
+        obj[method].__whyOriginal = original;
       }
 
-      function installHooks() {
-
-        if (window.__whyHooksInstalled)
-          return;
-
-        window.__whyHooksInstalled = true;
-
-        const Xrm = window.Xrm;
-        const page = Xrm?.Page;
-
-        if (!page)
-          return;
+      function installXrmHooks() {
+        const Xrm = window.Xrm || window.parent?.Xrm || window.top?.Xrm;
+        const page = window.Xrm?.Page || window.parent?.Xrm?.Page || window.top?.Xrm?.Page;
 
         try {
+          if (page?.data?.entity?.attributes?.forEach) {
+            page.data.entity.attributes.forEach((attr) => {
+              wrap(attr, "setValue", "setValue", (args, ctx) => ({
+                attribute: ctx.getName?.(),
+                newValue: safe(args[0])
+              }));
 
-          page.data.entity.attributes.forEach(attr => {
-
-            wrap(attr, "setValue", "setValue", (args, ctx) => ({
-              attribute: ctx.getName?.(),
-              newValue: safe(args[0])
-            }));
-
-            wrap(attr, "fireOnChange", "fireOnChange", (args, ctx) => ({
-              attribute: ctx.getName?.()
-            }));
-
-          });
-
-        } catch {}
-
-        try {
-
-          page.ui.controls.forEach(ctrl => {
-
-            wrap(ctrl, "setVisible", "setVisible", (args, ctx) => ({
-              control: ctx.getName?.(),
-              visible: args[0]
-            }));
-
-            wrap(ctrl, "setDisabled", "setDisabled", (args, ctx) => ({
-              control: ctx.getName?.(),
-              disabled: args[0]
-            }));
-
-            wrap(ctrl, "setNotification", "setNotification", (args, ctx) => ({
-              control: ctx.getName?.(),
-              message: args[0]
-            }));
-
-            wrap(ctrl, "clearNotification", "clearNotification", (args, ctx) => ({
-              control: ctx.getName?.()
-            }));
-
-          });
-
-        } catch {}
-
-        try {
-
-          wrap(Xrm.WebApi, "retrieveMultipleRecords", "retrieveMultipleRecords", (args) => ({
-            entity: args[0],
-            options: safe(args[1])
-          }));
-
-        } catch {}
-
-        try {
-
-          page.data.entity.addOnSave((executionContext) => {
-
-            const args = executionContext.getEventArgs?.();
-
-            addLog("OnSave", {
-              saveMode: args?.getSaveMode?.(),
-              prevented: args?.isDefaultPrevented?.()
+              wrap(attr, "fireOnChange", "fireOnChange", (args, ctx) => ({
+                attribute: ctx.getName?.()
+              }));
             });
-
-          });
-
+          }
         } catch {}
+
+        try {
+          if (page?.ui?.controls?.forEach) {
+            page.ui.controls.forEach((ctrl) => {
+              wrap(ctrl, "setVisible", "setVisible", (args, ctx) => ({
+                control: ctx.getName?.(),
+                visible: args[0]
+              }));
+
+              wrap(ctrl, "setDisabled", "setDisabled", (args, ctx) => ({
+                control: ctx.getName?.(),
+                disabled: args[0]
+              }));
+
+              wrap(ctrl, "setNotification", "setNotification", (args, ctx) => ({
+                control: ctx.getName?.(),
+                message: args[0],
+                uniqueId: args[1]
+              }));
+
+              wrap(ctrl, "clearNotification", "clearNotification", (args, ctx) => ({
+                control: ctx.getName?.(),
+                uniqueId: args[0]
+              }));
+            });
+          }
+        } catch {}
+
+        try {
+          if (Xrm?.WebApi) {
+            wrap(Xrm.WebApi, "retrieveRecord", "retrieveRecord", (args) => ({
+              entity: args[0],
+              id: args[1],
+              options: safe(args[2])
+            }));
+
+            wrap(Xrm.WebApi, "retrieveMultipleRecords", "retrieveMultipleRecords", (args) => ({
+              entity: args[0],
+              options: safe(args[1])
+            }));
+
+            wrap(Xrm.WebApi, "createRecord", "createRecord", (args) => ({
+              entity: args[0],
+              data: safe(args[1])
+            }));
+
+            wrap(Xrm.WebApi, "updateRecord", "updateRecord", (args) => ({
+              entity: args[0],
+              id: args[1],
+              data: safe(args[2])
+            }));
+
+            wrap(Xrm.WebApi, "deleteRecord", "deleteRecord", (args) => ({
+              entity: args[0],
+              id: args[1]
+            }));
+
+            wrap(Xrm.WebApi.online || Xrm.WebApi, "execute", "execute", (args) => ({
+              request: safe(args[0])
+            }));
+          }
+        } catch {}
+
+        try {
+          if (Xrm?.Navigation) {
+            wrap(Xrm.Navigation, "openForm", "openForm", (args) => ({
+              options: safe(args[0]),
+              params: safe(args[1])
+            }));
+
+            wrap(Xrm.Navigation, "navigateTo", "navigateTo", (args) => ({
+              pageInput: safe(args[0]),
+              navigationOptions: safe(args[1])
+            }));
+
+            wrap(Xrm.Navigation, "openAlertDialog", "openAlertDialog", (args) => ({
+              alertStrings: safe(args[0]),
+              alertOptions: safe(args[1])
+            }));
+
+            wrap(Xrm.Navigation, "openConfirmDialog", "openConfirmDialog", (args) => ({
+              confirmStrings: safe(args[0]),
+              confirmOptions: safe(args[1])
+            }));
+          }
+        } catch {}
+
+        try {
+          if (page?.data) {
+            wrap(page.data, "save", "formSave", (args) => ({
+              saveOptions: safe(args[0])
+            }));
+
+            wrap(page.data, "refresh", "formRefresh", (args) => ({
+              save: safe(args[0])
+            }));
+          }
+        } catch {}
+
+        try {
+          if (page?.data?.entity?.addOnSave && !window.__whyOnSaveHookInstalled) {
+            window.__whyOnSaveHookInstalled = true;
+
+            page.data.entity.addOnSave((executionContext) => {
+              const args = executionContext.getEventArgs?.();
+
+              addLog("OnSave", {
+                saveMode: args?.getSaveMode?.(),
+                prevented: args?.isDefaultPrevented?.()
+              });
+            });
+          }
+        } catch {}
+      }
+
+      function installHtmlHooks() {
+        if (window.__whyHtmlHooksInstalled) return;
+        window.__whyHtmlHooksInstalled = true;
+
+        document.addEventListener(
+          "click",
+          (e) => {
+            const el = e.target?.closest?.(
+              "button, a, input, select, textarea, div, span, [onclick], [role='button'], [data-id], [aria-label]"
+            );
+
+            if (!el) return;
+
+            if (
+              el.id?.startsWith("__whyRecorder") ||
+              el.closest?.("#__whyRecorderModal")
+            ) {
+              return;
+            }
+
+            addLog("HTML CLICK", {
+              tag: el.tagName,
+              id: el.id || "",
+              name: el.getAttribute?.("name") || "",
+              typeAttr: el.getAttribute?.("type") || "",
+              dataId: el.getAttribute?.("data-id") || "",
+              aria: el.getAttribute?.("aria-label") || "",
+              text: String(el.innerText || el.value || "").trim().slice(0, 500),
+              onclick: String(el.getAttribute?.("onclick") || "").slice(0, 800),
+              inlineCode: String(el.getAttribute?.("onclick") || "").slice(0, 800)
+            });
+          },
+          true
+        );
+
+        try {
+          const originalAddEventListener = EventTarget.prototype.addEventListener;
+
+          if (!originalAddEventListener.__whyWrapped) {
+            EventTarget.prototype.addEventListener = function (type, handler, options) {
+              if (
+                typeof handler === "function" &&
+                ["click", "change", "input", "submit", "keydown"].includes(type)
+              ) {
+                const wrappedHandler = function (...args) {
+                  addLog("HTML EVENT HANDLER", {
+                    eventType: type,
+                    handlerName: handler.name || "anonymous",
+                    targetTag: this?.tagName || "",
+                    targetId: this?.id || "",
+                    targetName: this?.getAttribute?.("name") || "",
+                    targetClass: String(this?.className || "").slice(0, 300),
+                    targetText: String(this?.innerText || this?.value || "").slice(0, 500)
+                  });
+
+                  return handler.apply(this, args);
+                };
+
+                return originalAddEventListener.call(this, type, wrappedHandler, options);
+              }
+
+              return originalAddEventListener.call(this, type, handler, options);
+            };
+
+            EventTarget.prototype.addEventListener.__whyWrapped = true;
+          }
+        } catch {}
+
+        try {
+          const elements = document.querySelectorAll("[onclick], [onchange], button, input, select, textarea, a");
+
+          elements.forEach((el) => {
+            if (el.__whyInlineWrapped) return;
+            el.__whyInlineWrapped = true;
+
+            if (typeof el.onclick === "function") {
+              const originalOnClick = el.onclick;
+
+              el.onclick = function (...args) {
+                addLog("HTML INLINE onclick", {
+                  tag: el.tagName,
+                  id: el.id || "",
+                  text: String(el.innerText || el.value || "").trim().slice(0, 500),
+                  handlerName: originalOnClick.name || "anonymous",
+                  inlineCode: String(el.getAttribute?.("onclick") || "").slice(0, 800)
+                });
+
+                return originalOnClick.apply(this, args);
+              };
+            }
+
+            if (typeof el.onchange === "function") {
+              const originalOnChange = el.onchange;
+
+              el.onchange = function (...args) {
+                addLog("HTML INLINE onchange", {
+                  tag: el.tagName,
+                  id: el.id || "",
+                  value: safe(el.value),
+                  handlerName: originalOnChange.name || "anonymous",
+                  inlineCode: String(el.getAttribute?.("onchange") || "").slice(0, 800)
+                });
+
+                return originalOnChange.apply(this, args);
+              };
+            }
+          });
+        } catch {}
+
+        try {
+          if (typeof window.fetch === "function" && !window.fetch.__whyWrapped) {
+            const originalFetch = window.fetch;
+
+            window.fetch = function (...args) {
+              addLog("HTML fetch", {
+                url: String(args[0]).slice(0, 1500),
+                options: safe(args[1])
+              });
+
+              return originalFetch.apply(this, args);
+            };
+
+            window.fetch.__whyWrapped = true;
+          }
+        } catch {}
+
+        try {
+          if (
+            XMLHttpRequest?.prototype?.open &&
+            !XMLHttpRequest.prototype.open.__whyWrapped
+          ) {
+            const originalOpen = XMLHttpRequest.prototype.open;
+            const originalSend = XMLHttpRequest.prototype.send;
+
+            XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+              this.__whyXhrInfo = {
+                method,
+                url: String(url).slice(0, 1500)
+              };
+
+              return originalOpen.call(this, method, url, ...rest);
+            };
+
+            XMLHttpRequest.prototype.open.__whyWrapped = true;
+
+            XMLHttpRequest.prototype.send = function (body) {
+              addLog("HTML XMLHttpRequest", {
+                method: this.__whyXhrInfo?.method,
+                url: this.__whyXhrInfo?.url,
+                body: safe(body)
+              });
+
+              return originalSend.call(this, body);
+            };
+
+            XMLHttpRequest.prototype.send.__whyWrapped = true;
+          }
+        } catch {}
+      }
+
+      installXrmHooks();
+      installHtmlHooks();
+    }
+  });
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: () => {
+      const store = window.__whyRecorderStore ||= {
+        logs: [],
+        recording: false
+      };
+
+      function safe(v) {
+        try {
+          if (v === undefined) return "undefined";
+          if (v === null) return "null";
+          if (typeof v === "string") return v.slice(0, 1500);
+          if (typeof v === "number" || typeof v === "boolean") return String(v);
+          if (typeof v === "object") return JSON.stringify(v).slice(0, 2000);
+          return String(v).slice(0, 1500);
+        } catch {
+          return "[unserializable]";
+        }
+      }
+
+      function extractCaller(stackText) {
+        if (!stackText) return "";
+
+        const skipFiles = [
+          "content.powerapps.com",
+          "ey_Elad.Global.Loader.js",
+          "Main_system_library.js",
+          "<anonymous>"
+        ];
+
+        const lines = stackText.split("\n");
+        const crmLines = lines.filter((l) => l.includes("/webresources/"));
+
+        const preferredLine =
+          crmLines.find((l) => !skipFiles.some((skip) => l.includes(skip))) ||
+          crmLines[0];
+
+        if (!preferredLine) return "";
+
+        const fnMatch = preferredLine.match(/at\s+(.+?)\s+\(/);
+        const fileMatch = preferredLine.match(/\/webresources\/([^:]+):(\d+):(\d+)/);
+
+        const fn = fnMatch?.[1]?.trim() || "anonymous";
+        const file = fileMatch?.[1] || "";
+        const line = fileMatch?.[2] || "";
+
+        return `${fn} (${file}:${line})`;
+      }
+
+      function buildRawText() {
+        return store.logs
+          .map((x, i) => {
+            const caller = extractCaller(x.stack);
+
+            return [
+              `#${i + 1}`,
+              `[${x.time}] ${x.type}`,
+              x.attribute ? `attribute: ${x.attribute}` : "",
+              x.control ? `control: ${x.control}` : "",
+              x.entity ? `entity: ${x.entity}` : "",
+              x.id ? `id: ${x.id}` : "",
+              x.visible !== undefined ? `visible: ${x.visible}` : "",
+              x.disabled !== undefined ? `disabled: ${x.disabled}` : "",
+              x.newValue !== undefined ? `newValue: ${x.newValue}` : "",
+              x.message ? `message: ${x.message}` : "",
+              x.options ? `options: ${x.options}` : "",
+              x.text ? `text: ${x.text}` : "",
+              x.onclick ? `onclick: ${x.onclick}` : "",
+              x.inlineCode ? `inlineCode: ${x.inlineCode}` : "",
+              x.eventType ? `eventType: ${x.eventType}` : "",
+              x.handlerName ? `handlerName: ${x.handlerName}` : "",
+              x.url ? `url: ${x.url}` : "",
+              x.method ? `method: ${x.method}` : "",
+              x.dataId ? `dataId: ${x.dataId}` : "",
+              x.aria ? `aria: ${x.aria}` : "",
+              caller ? `caller: ${caller}` : "",
+              x.frameUrl ? `frame: ${x.frameUrl}` : ""
+            ]
+              .filter(Boolean)
+              .join("\n");
+          })
+          .join("\n\n");
       }
 
       function buildWhy(field) {
-
         const lower = field.toLowerCase();
 
-        const relevant = logs.filter(x => {
+        const relevant = store.logs
+          .map((x, index) => ({ ...x, index }))
+          .filter((x) => {
+            const attr = String(x.attribute || "").toLowerCase();
+            const control = String(x.control || "").toLowerCase();
+            const text = String(x.text || "").toLowerCase();
+            const dataId = String(x.dataId || "").toLowerCase();
+            const id = String(x.id || "").toLowerCase();
+            const inlineCode = String(x.inlineCode || "").toLowerCase();
 
-          const attr = String(x.attribute || "").toLowerCase();
-          const control = String(x.control || "").toLowerCase();
-
-          return (
-            attr.includes(lower) ||
-            control.includes(lower)
-          );
-        });
+            return (
+              attr.includes(lower) ||
+              control.includes(lower) ||
+              text.includes(lower) ||
+              dataId.includes(lower) ||
+              id.includes(lower) ||
+              inlineCode.includes(lower)
+            );
+          });
 
         if (!relevant.length) {
-          return `No events found for: ${field}`;
+          return `No events found for: ${field}\n\nTip: click Start Recording, do the action, click Stop Recording, then Analyze Field.`;
         }
 
         let text = `WHY DID THIS HAPPEN?\n`;
         text += `====================\n\n`;
-        text += `Target: ${field}\n\n`;
+        text += `Target: ${field}\n`;
+        text += `Events found: ${relevant.length}\n\n`;
 
         relevant.forEach((x, i) => {
-
-          text += `#${i + 1}\n`;
-          text += `Type: ${x.type}\n`;
-
-          if (x.attribute)
-            text += `Attribute: ${x.attribute}\n`;
-
-          if (x.control)
-            text += `Control: ${x.control}\n`;
-
-          if (x.visible !== undefined)
-            text += `Visible: ${x.visible}\n`;
-
-          if (x.disabled !== undefined)
-            text += `Disabled: ${x.disabled}\n`;
-
-          if (x.newValue !== undefined)
-            text += `New Value: ${x.newValue}\n`;
-
-          if (x.message)
-            text += `Message: ${x.message}\n`;
-
           const caller = extractCaller(x.stack);
 
-          if (caller)
-            text += `Caller: ${caller}\n`;
+          text += `#${i + 1} ${x.type}\n`;
+
+          if (x.attribute) text += `Attribute: ${x.attribute}\n`;
+          if (x.control) text += `Control: ${x.control}\n`;
+          if (x.visible !== undefined) text += `Visible: ${x.visible}\n`;
+          if (x.disabled !== undefined) text += `Disabled: ${x.disabled}\n`;
+          if (x.newValue !== undefined) text += `New Value: ${x.newValue}\n`;
+          if (x.text) text += `Text: ${x.text}\n`;
+          if (x.onclick) text += `OnClick: ${x.onclick}\n`;
+          if (x.inlineCode) text += `Inline Code: ${x.inlineCode}\n`;
+          if (x.eventType) text += `Event: ${x.eventType}\n`;
+          if (x.handlerName) text += `Handler: ${x.handlerName}\n`;
+          if (x.entity) text += `Entity: ${x.entity}\n`;
+          if (x.options) text += `Options: ${x.options}\n`;
+          if (caller) text += `Changed/Called By: ${caller}\n`;
 
           text += `\n`;
         });
@@ -7629,49 +7898,23 @@ function extractCaller(stackText) {
       }
 
       function render() {
-
         const ta = document.getElementById("__whyRecorderText");
         const status = document.getElementById("__whyRecorderStatus");
+        if (!ta || !status) return;
 
-        if (!ta || !status)
-          return;
+        status.textContent = store.recording
+          ? `🔴 Recording (${store.logs.length})`
+          : `⚪ Idle (${store.logs.length})`;
 
-        status.textContent =
-          window.__whyRecorderRecording
-            ? `🔴 Recording (${logs.length})`
-            : `⚪ Idle`;
-
-        ta.value =
-          logs.map((x, i) => {
-
-            const caller = extractCaller(x.stack);
-
-            return [
-              `#${i + 1}`,
-              `[${x.time}] ${x.type}`,
-              x.attribute ? `attribute: ${x.attribute}` : "",
-              x.control ? `control: ${x.control}` : "",
-              x.visible !== undefined ? `visible: ${x.visible}` : "",
-              x.disabled !== undefined ? `disabled: ${x.disabled}` : "",
-              x.newValue !== undefined ? `newValue: ${x.newValue}` : "",
-              caller ? `caller: ${caller}` : ""
-            ]
-              .filter(Boolean)
-              .join("\n");
-
-          }).join("\n\n");
-
+        ta.value = buildRawText();
         ta.scrollTop = ta.scrollHeight;
       }
 
       function showModal() {
-
         document.getElementById("__whyRecorderModal")?.remove();
 
         const overlay = document.createElement("div");
-
         overlay.id = "__whyRecorderModal";
-
         overlay.style.cssText = `
           position: fixed;
           inset: 0;
@@ -7681,53 +7924,48 @@ function extractCaller(stackText) {
           align-items: center;
           justify-content: center;
           padding: 16px;
+          direction: ltr;
         `;
 
         const box = document.createElement("div");
-
         box.style.cssText = `
-          width: min(1100px, 98vw);
-          height: min(760px, 92vh);
+          width: min(1150px, 96vw);
+          height: min(760px, 90vh);
           background: white;
           border-radius: 14px;
           overflow: hidden;
           display: flex;
           flex-direction: column;
-          font-family: system-ui;
+          font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+          box-shadow: 0 18px 50px rgba(0,0,0,.35);
         `;
 
         const header = document.createElement("div");
-
         header.style.cssText = `
           padding: 12px 14px;
-          border-bottom: 1px solid #ddd;
-          font-weight: 700;
+          border-bottom: 1px solid #e5e7eb;
+          font-weight: 800;
           display: flex;
           justify-content: space-between;
           align-items: center;
         `;
-
         header.innerHTML = `
           <span>❓ Why Did This Happen</span>
-          <span id="__whyRecorderStatus"></span>
+          <span id="__whyRecorderStatus" style="font-size:13px;"></span>
         `;
 
         const toolbar = document.createElement("div");
-
         toolbar.style.cssText = `
           display:flex;
           gap:8px;
-          padding:10px;
-          border-bottom:1px solid #ddd;
+          padding:10px 14px;
+          border-bottom:1px solid #e5e7eb;
           flex-wrap:wrap;
         `;
 
         function btn(text, color) {
-
           const b = document.createElement("button");
-
           b.textContent = text;
-
           b.style.cssText = `
             border:none;
             background:${color};
@@ -7735,90 +7973,85 @@ function extractCaller(stackText) {
             padding:10px 14px;
             border-radius:10px;
             cursor:pointer;
-            font-weight:700;
+            font-weight:800;
           `;
-
           return b;
         }
 
         const startBtn = btn("🎥 Start Recording", "#16a34a");
         const stopBtn = btn("⏹ Stop Recording", "#dc2626");
-        const whyBtn = btn("❓ Analyze Field", "#2563eb");
+        const whyBtn = btn("❓ Analyze Field / Button", "#2563eb");
+        const rawBtn = btn("Raw Logs", "#334155");
         const clearBtn = btn("🧹 Clear", "#f97316");
         const closeBtn = btn("Close", "#64748b");
 
         const ta = document.createElement("textarea");
-
         ta.id = "__whyRecorderText";
-
+        ta.readOnly = true;
         ta.style.cssText = `
           flex:1;
           width:100%;
           border:none;
           resize:none;
           outline:none;
-          padding:12px;
+          padding:12px 14px;
           box-sizing:border-box;
-          font-family:Consolas;
+          font-family:Consolas, Monaco, 'Courier New', monospace;
           font-size:12px;
+          line-height:1.45;
           white-space:pre;
+          direction:ltr;
+          text-align:left;
         `;
 
         startBtn.onclick = () => {
-          window.__whyRecorderRecording = true;
+          store.recording = true;
           render();
         };
 
         stopBtn.onclick = () => {
-          window.__whyRecorderRecording = false;
+          store.recording = false;
           render();
         };
 
         clearBtn.onclick = () => {
-          logs.length = 0;
+          store.logs.length = 0;
           render();
         };
 
+        rawBtn.onclick = () => render();
+
         whyBtn.onclick = () => {
+          const field = prompt("Enter field/control/button/id/text\nExample: ey_contactid / showAll / הצג הכל");
+          if (!field) return;
 
-          const field = prompt(
-            "Enter field/control logical name\nExample: ey_contactid"
-          );
-
-          if (!field)
-            return;
-
-          ta.value = buildWhy(field);
+          ta.value = buildWhy(field.trim());
           ta.scrollTop = 0;
         };
 
-        closeBtn.onclick = () => {
-          overlay.remove();
-        };
+        closeBtn.onclick = () => overlay.remove();
 
         toolbar.appendChild(startBtn);
         toolbar.appendChild(stopBtn);
         toolbar.appendChild(whyBtn);
+        toolbar.appendChild(rawBtn);
         toolbar.appendChild(clearBtn);
         toolbar.appendChild(closeBtn);
 
         box.appendChild(header);
         box.appendChild(toolbar);
         box.appendChild(ta);
-
         overlay.appendChild(box);
-
         document.body.appendChild(overlay);
 
         render();
       }
 
-      installHooks();
-
-      window.__whyRecorderShow = showModal;
-
+      window.__whyRecorderRender = render;
       showModal();
     }
   });
 });
+
+
 
