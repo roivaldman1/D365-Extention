@@ -6185,10 +6185,7 @@ document.getElementById("formBeautifier")?.addEventListener("click", async () =>
 });
 
 
-
-
-
-document.getElementById("ribbonDeepInspector")?.addEventListener("click", async () => {
+document.getElementById("elementInspector")?.addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({
     active: true,
     currentWindow: true
@@ -6225,16 +6222,32 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
     },
     world: "MAIN",
     func: () => {
-      if (window.__rvRibbonDeepInspectorInstalled) {
-        alert("Ribbon Deep Inspector already installed.\n\nHover a ribbon button and press ALT + SHIFT.");
+      if (window.__rvElementInspectorInstalled) {
+        alert("Element Inspector already installed.\n\nHover a ribbon button and press ALT + SHIFT.");
         return;
       }
 
-      window.__rvRibbonDeepInspectorInstalled = true;
+      window.__rvElementInspectorInstalled = true;
 
       let currentHoveredRibbonButton = null;
 
-      showRibbonInspectorHelper();
+      // --- Deactivate / teardown ---
+      function deactivate() {
+        removeRibbonHighlight();
+        removePopup();
+
+        document.removeEventListener("mouseover", onMouseOver, true);
+        document.removeEventListener("keydown",   onKeyDown,   true);
+
+        document.getElementById("rv-element-helper")?.remove();
+        document.getElementById("rv-element-helper-style")?.remove();
+        document.getElementById("rv-element-inspector-style")?.remove();
+
+        window.__rvElementInspectorInstalled = false;
+        window.__rvCachedApplicationRibbonXml   = null;
+      }
+
+      showElementInspectorHelper();
 
       async function retrieveEntityRibbonXml(entityName) {
         const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
@@ -6275,49 +6288,49 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
         return await decodeRibbonXml(raw);
       }
 
-    async function retrieveApplicationRibbonXml() {
-  if (window.__rvCachedApplicationRibbonXml) {
-    return window.__rvCachedApplicationRibbonXml;
-  }
+      async function retrieveApplicationRibbonXml() {
+        if (window.__rvCachedApplicationRibbonXml) {
+          return window.__rvCachedApplicationRibbonXml;
+        }
 
-  const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+        const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
 
-  const url = `${clientUrl}/api/data/v9.2/RetrieveApplicationRibbon()`;
+        const url = `${clientUrl}/api/data/v9.2/RetrieveApplicationRibbon()`;
 
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      "OData-MaxVersion": "4.0",
-      "OData-Version": "4.0"
-    }
-  });
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0"
+          }
+        });
 
-  const text = await response.text();
+        const text = await response.text();
 
-  if (!response.ok) {
-    throw new Error(text);
-  }
+        if (!response.ok) {
+          throw new Error(text);
+        }
 
-  const json = JSON.parse(text);
+        const json = JSON.parse(text);
 
-  const raw =
-    json.CompressedApplicationRibbonXml ||
-    json.ApplicationRibbonXml ||
-    json.RibbonXml ||
-    json.value ||
-    "";
+        const raw =
+          json.CompressedApplicationRibbonXml ||
+          json.ApplicationRibbonXml ||
+          json.RibbonXml ||
+          json.value ||
+          "";
 
-  if (!raw) {
-    throw new Error("Application Ribbon XML is empty.");
-  }
+        if (!raw) {
+          throw new Error("Application Ribbon XML is empty.");
+        }
 
-  const xml = await decodeRibbonXml(raw);
+        const xml = await decodeRibbonXml(raw);
 
-  window.__rvCachedApplicationRibbonXml = xml;
+        window.__rvCachedApplicationRibbonXml = xml;
 
-  return xml;
-}
+        return xml;
+      }
 
       async function decodeRibbonXml(raw) {
         if (raw.trim().startsWith("<")) {
@@ -6326,7 +6339,6 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
 
         const bytes = base64ToBytes(raw);
 
-        // ZIP starts with PK
         if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
           return await extractXmlFromZip(bytes);
         }
@@ -6475,54 +6487,54 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
         return new XMLSerializer().serializeToString(node);
       }
 
-     function getRuleIds(commandDef, containerName) {
-  if (!commandDef) return [];
+      function getRuleIds(commandDef, containerName) {
+        if (!commandDef) return [];
 
-  const container = commandDef.getElementsByTagName(containerName)?.[0];
+        const container = commandDef.getElementsByTagName(containerName)?.[0];
 
-  if (!container) return [];
+        if (!container) return [];
 
-  const childTag =
-    containerName === "EnableRules"
-      ? "EnableRule"
-      : "DisplayRule";
+        const childTag =
+          containerName === "EnableRules"
+            ? "EnableRule"
+            : "DisplayRule";
 
-  return [...container.getElementsByTagName(childTag)]
-    .map(x => x.getAttribute("Id"))
-    .filter(Boolean);
-}
-
-  function getRuleDetails(xmlDocs, ruleIds, ruleTagName) {
-  const docs = xmlDocs.filter(Boolean);
-
-  return ruleIds.map(id => {
-    let rule = null;
-    let source = "";
-
-    for (const docInfo of docs) {
-      const allRules = [...docInfo.doc.getElementsByTagName(ruleTagName)];
-
-      rule = allRules.find(x => {
-        const ruleId = x.getAttribute("Id") || "";
-        const hasChildren = x.children && x.children.length > 0;
-
-        return ruleId === id && hasChildren;
-      });
-
-      if (rule) {
-        source = docInfo.name;
-        break;
+        return [...container.getElementsByTagName(childTag)]
+          .map(x => x.getAttribute("Id"))
+          .filter(Boolean);
       }
-    }
 
-    return {
-      id,
-      found: !!rule,
-      source,
-      xml: rule ? getNodeXml(rule) : "Rule definition not found"
-    };
-  });
-}
+      function getRuleDetails(xmlDocs, ruleIds, ruleTagName) {
+        const docs = xmlDocs.filter(Boolean);
+
+        return ruleIds.map(id => {
+          let rule = null;
+          let source = "";
+
+          for (const docInfo of docs) {
+            const allRules = [...docInfo.doc.getElementsByTagName(ruleTagName)];
+
+            rule = allRules.find(x => {
+              const ruleId = x.getAttribute("Id") || "";
+              const hasChildren = x.children && x.children.length > 0;
+
+              return ruleId === id && hasChildren;
+            });
+
+            if (rule) {
+              source = docInfo.name;
+              break;
+            }
+          }
+
+          return {
+            id,
+            found: !!rule,
+            source,
+            xml: rule ? getNodeXml(rule) : "Rule definition not found"
+          };
+        });
+      }
 
       function getJavaScriptActions(commandDef) {
         if (!commandDef) return [];
@@ -6551,7 +6563,7 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
       }
 
       async function resolveRibbon(entityXmlText, clickedInfo) {
-        const entityXmlDoc = parseXml(entityXmlText);
+        const entityXmlDoc = entityXmlText ? parseXml(entityXmlText) : null;
 
         let appXmlDoc = null;
         let appXmlError = "";
@@ -6573,7 +6585,15 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
           findExactById(entityXmlDoc, "SplitButton", buttonId) ||
           findContainsById(entityXmlDoc, "SplitButton", buttonId) ||
           findExactById(entityXmlDoc, "MenuItem", buttonId) ||
-          findContainsById(entityXmlDoc, "MenuItem", buttonId);
+          findContainsById(entityXmlDoc, "MenuItem", buttonId) ||
+          findExactById(appXmlDoc, "Button", buttonId) ||
+          findContainsById(appXmlDoc, "Button", buttonId) ||
+          findExactById(appXmlDoc, "FlyoutAnchor", buttonId) ||
+          findContainsById(appXmlDoc, "FlyoutAnchor", buttonId) ||
+          findExactById(appXmlDoc, "SplitButton", buttonId) ||
+          findContainsById(appXmlDoc, "SplitButton", buttonId) ||
+          findExactById(appXmlDoc, "MenuItem", buttonId) ||
+          findContainsById(appXmlDoc, "MenuItem", buttonId);
 
         const commandId =
           button?.getAttribute("Command") ||
@@ -6586,37 +6606,28 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
           findExactById(appXmlDoc, "CommandDefinition", commandId) ||
           findContainsById(appXmlDoc, "CommandDefinition", commandId);
 
-        const enableRuleIds = getRuleIds(commandDef, "EnableRules");
+        const enableRuleIds  = getRuleIds(commandDef, "EnableRules");
         const displayRuleIds = getRuleIds(commandDef, "DisplayRules");
 
         const searchDocs = [
-          { name: "Entity Ribbon", doc: entityXmlDoc },
-          { name: "Application Ribbon", doc: appXmlDoc }
+          entityXmlDoc ? { name: "Entity Ribbon",      doc: entityXmlDoc } : null,
+          appXmlDoc    ? { name: "Application Ribbon",  doc: appXmlDoc    } : null
         ];
 
-        const enableRules = getRuleDetails(
-          searchDocs,
-          enableRuleIds,
-          "EnableRule"
-        );
-
-        const displayRules = getRuleDetails(
-          searchDocs,
-          displayRuleIds,
-          "DisplayRule"
-        );
+        const enableRules  = getRuleDetails(searchDocs, enableRuleIds,  "EnableRule");
+        const displayRules = getRuleDetails(searchDocs, displayRuleIds, "DisplayRule");
 
         return {
           clicked: clickedInfo,
           buttonId,
           commandId,
-          buttonFound: !!button,
-          commandFound: !!commandDef,
-          appRibbonLoaded: !!appXmlDoc,
-          appRibbonError : appXmlError ,
-          buttonXml: getNodeXml(button),
-          commandXml: getNodeXml(commandDef),
-          jsActions: getJavaScriptActions(commandDef),
+          buttonFound:      !!button,
+          commandFound:     !!commandDef,
+          appRibbonLoaded:  !!appXmlDoc,
+          appRibbonError:   appXmlError,
+          buttonXml:        getNodeXml(button),
+          commandXml:       getNodeXml(commandDef),
+          jsActions:        getJavaScriptActions(commandDef),
           enableRules,
           displayRules
         };
@@ -6641,13 +6652,21 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
           candidates.find(x => {
             const id = x.getAttribute?.("data-id") || x.id || "";
             return id.includes("|");
-          }) || first
+          }) ||
+          candidates.find(x => {
+            const id = x.getAttribute?.("data-id") || x.id || "";
+            return id.length > 0;
+          }) ||
+          first
         );
       }
 
       function getClickedInfo(btn) {
         const dataId = btn.getAttribute("data-id") || btn.id || "";
-        const parts = dataId.split("|");
+        const parts  = dataId.split("|");
+
+        const urlEntity = new URLSearchParams(location.search).get("etn") || "";
+        const hasPipes  = parts.length >= 4;
 
         return {
           text:
@@ -6656,11 +6675,12 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
             btn.getAttribute("title") ||
             "",
           dataId,
-          elementId: btn.id || "",
-          entity: parts[0] || "",
-          relationship: parts[1] || "",
-          location: parts[2] || "",
-          buttonId: parts.slice(3).join("|")
+          elementId:    btn.id || "",
+          entity:       hasPipes ? parts[0] : urlEntity,
+          relationship: hasPipes ? parts[1] : "",
+          location:     hasPipes ? parts[2] : "",
+          buttonId:     hasPipes ? parts.slice(3).join("|") : dataId,
+          isDashboard:  !hasPipes
         };
       }
 
@@ -6669,7 +6689,7 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
 
         if (!btn) return;
 
-        btn.style.outline = "3px solid #6aa9ff";
+        btn.style.outline       = "3px solid #6aa9ff";
         btn.style.outlineOffset = "2px";
 
         currentHoveredRibbonButton = btn;
@@ -6677,64 +6697,62 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
 
       function removeRibbonHighlight() {
         if (currentHoveredRibbonButton) {
-          currentHoveredRibbonButton.style.outline = "";
+          currentHoveredRibbonButton.style.outline       = "";
           currentHoveredRibbonButton.style.outlineOffset = "";
         }
       }
 
-      document.addEventListener(
-        "mouseover",
-        function (e) {
-          const btn = findRealRibbonButton(e.target);
+      // Named functions so removeEventListener can target them exactly
+      function onMouseOver(e) {
+        const btn    = findRealRibbonButton(e.target);
+        if (!btn) return;
 
-          if (!btn) return;
+        const dataId = btn.getAttribute("data-id") || btn.id || "";
+        if (!dataId) return;
 
-          const dataId = btn.getAttribute("data-id") || btn.id || "";
+        highlightRibbonButton(btn);
+      }
 
-          if (!dataId.includes("|")) return;
+      async function onKeyDown(e) {
+        if (!(e.altKey && e.shiftKey)) return;
 
-          highlightRibbonButton(btn);
-        },
-        true
-      );
+        if (!currentHoveredRibbonButton) {
+          alert("Hover a ribbon button first, then press ALT + SHIFT.");
+          return;
+        }
 
-      document.addEventListener(
-        "keydown",
-        async function (e) {
-          if (!(e.altKey && e.shiftKey)) return;
+        e.preventDefault();
+        e.stopPropagation();
 
-          if (!currentHoveredRibbonButton) {
-            alert("Hover a ribbon button first, then press ALT + SHIFT.");
-            return;
+        const clickedInfo = getClickedInfo(currentHoveredRibbonButton);
+
+        if (!clickedInfo.buttonId) {
+          alert("Could not resolve ribbon button ID.");
+          return;
+        }
+
+        showLoadingPopup(clickedInfo);
+
+        try {
+          let entityXml = "";
+          if (clickedInfo.entity) {
+            entityXml = await retrieveEntityRibbonXml(clickedInfo.entity);
           }
 
-          e.preventDefault();
-          e.stopPropagation();
+          const resolved = await resolveRibbon(entityXml, clickedInfo);
+          showPopup(resolved);
+        } catch (err) {
+          removePopup();
 
-          const clickedInfo = getClickedInfo(currentHoveredRibbonButton);
+          alert(
+            "Failed to resolve ribbon.\n\n" +
+            (err.message || String(err))
+          );
+        }
+      }
 
-          if (!clickedInfo.entity || !clickedInfo.buttonId) {
-            alert("Could not resolve ribbon button.");
-            return;
-          }
-
-          showLoadingPopup(clickedInfo);
-
-          try {
-            const entityXml = await retrieveEntityRibbonXml(clickedInfo.entity);
-            const resolved = await resolveRibbon(entityXml, clickedInfo);
-            showPopup(resolved);
-          } catch (err) {
-            removePopup();
-
-            alert(
-              "Failed to resolve ribbon.\n\n" +
-              (err.message || String(err))
-            );
-          }
-        },
-        true
-      );
+      document.addEventListener("mouseover", onMouseOver, true);
+      document.addEventListener("keydown",   onKeyDown,   true);
 
       function escapeHtml(value) {
         return String(value || "")
@@ -6746,17 +6764,17 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
       }
 
       function removePopup() {
-        document.getElementById("rv-ribbon-inspector-popup")?.remove();
+        document.getElementById("rv-element-inspector-popup")?.remove();
       }
 
       function injectStyle() {
-        if (document.getElementById("rv-ribbon-inspector-style")) return;
+        if (document.getElementById("rv-element-inspector-style")) return;
 
         const style = document.createElement("style");
-        style.id = "rv-ribbon-inspector-style";
+        style.id = "rv-element-inspector-style";
 
         style.textContent = `
-          #rv-ribbon-inspector-popup {
+          #rv-element-inspector-popup {
             position: fixed;
             top: 16px;
             left: 16px;
@@ -6845,6 +6863,11 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
             font-weight: bold;
           }
 
+          .rv-warn {
+            color: #ffd36a;
+            font-weight: bold;
+          }
+
           .rv-source {
             color: #ffd36a;
             font-size: 11px;
@@ -6876,6 +6899,11 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
             background: #444;
             color: white;
           }
+
+          .rv-btn-danger {
+            background: #ff6b6b;
+            color: #000;
+          }
         `;
 
         document.head.appendChild(style);
@@ -6886,24 +6914,28 @@ document.getElementById("ribbonDeepInspector")?.addEventListener("click", async 
         injectStyle();
 
         const popup = document.createElement("div");
-        popup.id = "rv-ribbon-inspector-popup";
+        popup.id = "rv-element-inspector-popup";
+
+        const entityLine = clickedInfo.entity
+          ? `Reading Ribbon XML for entity: ${escapeHtml(clickedInfo.entity)}`
+          : `No entity context (dashboard) — searching Application Ribbon only`;
 
         popup.innerHTML = `
           <div class="rv-head">
-            <h2>🎀 Ribbon Deep Inspector</h2>
-            <button id="rv-ribbon-inspector-close" class="rv-close">×</button>
+            <h2>🔍 Element Inspector</h2>
+            <button id="rv-element-inspector-close" class="rv-close">×</button>
           </div>
 
           <div class="rv-body">
             <div class="rv-section">Loading...</div>
-            <div class="rv-box">Reading Ribbon XML for entity: ${escapeHtml(clickedInfo.entity)}</div>
+            <div class="rv-box">${entityLine}</div>
             <div class="rv-box">Also loading Application Ribbon rules...</div>
           </div>
         `;
 
         document.body.appendChild(popup);
 
-        document.getElementById("rv-ribbon-inspector-close").onclick = removePopup;
+        document.getElementById("rv-element-inspector-close").onclick = removePopup;
       }
 
       function renderJsActions(actions) {
@@ -6941,22 +6973,29 @@ ${escapeHtml(JSON.stringify(a.parameters, null, 2))}
         injectStyle();
 
         const popup = document.createElement("div");
-        popup.id = "rv-ribbon-inspector-popup";
+        popup.id = "rv-element-inspector-popup";
+
+        const dashboardNote = data.clicked.isDashboard
+          ? `<div class="rv-label">Context</div>
+             <div class="rv-box"><span class="rv-warn">Dashboard</span> — no entity XML loaded. Results are from Application Ribbon only.</div>`
+          : "";
 
         popup.innerHTML = `
           <div class="rv-head">
-            <h2>🎀 Ribbon Deep Inspector</h2>
-            <button id="rv-ribbon-inspector-close" class="rv-close">×</button>
+            <h2>🔍 Element Inspector</h2>
+            <button id="rv-element-inspector-close" class="rv-close">×</button>
           </div>
 
           <div class="rv-body">
             <div class="rv-section">Clicked Button</div>
 
+            ${dashboardNote}
+
             <div class="rv-label">Text</div>
             <div class="rv-box">${escapeHtml(data.clicked.text)}</div>
 
             <div class="rv-label">Entity</div>
-            <div class="rv-box">${escapeHtml(data.clicked.entity)}</div>
+            <div class="rv-box">${escapeHtml(data.clicked.entity) || '<span class="rv-empty">none (dashboard)</span>'}</div>
 
             <div class="rv-label">Button Id</div>
             <div class="rv-box">${escapeHtml(data.buttonId)}</div>
@@ -6999,37 +7038,37 @@ ${escapeHtml(JSON.stringify(a.parameters, null, 2))}
           </div>
 
           <div class="rv-actions">
-            <button id="rv-ribbon-copy-json" class="rv-btn">Copy JSON</button>
-            <button id="rv-ribbon-copy-command" class="rv-btn">Copy Command</button>
-            <button id="rv-ribbon-close2" class="rv-btn rv-btn-secondary">Close</button>
+            <button id="rv-element-copy-json"    class="rv-btn">Copy JSON</button>
+            <button id="rv-element-copy-command" class="rv-btn">Copy Command</button>
+            <button id="rv-element-close2"       class="rv-btn rv-btn-secondary">Close</button>
           </div>
         `;
 
         document.body.appendChild(popup);
 
-        document.getElementById("rv-ribbon-inspector-close").onclick = removePopup;
-        document.getElementById("rv-ribbon-close2").onclick = removePopup;
+        document.getElementById("rv-element-inspector-close").onclick = removePopup;
+        document.getElementById("rv-element-close2").onclick          = removePopup;
 
-        document.getElementById("rv-ribbon-copy-json").onclick = async () => {
+        document.getElementById("rv-element-copy-json").onclick = async () => {
           await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
           alert("Copied JSON");
         };
 
-        document.getElementById("rv-ribbon-copy-command").onclick = async () => {
+        document.getElementById("rv-element-copy-command").onclick = async () => {
           await navigator.clipboard.writeText(data.commandId || data.buttonId || "");
           alert("Copied Command");
         };
       }
 
-      function showRibbonInspectorHelper() {
-        document.getElementById("rv-ribbon-helper")?.remove();
-        document.getElementById("rv-ribbon-helper-style")?.remove();
+      function showElementInspectorHelper() {
+        document.getElementById("rv-element-helper")?.remove();
+        document.getElementById("rv-element-helper-style")?.remove();
 
         const style = document.createElement("style");
-        style.id = "rv-ribbon-helper-style";
+        style.id = "rv-element-helper-style";
 
         style.textContent = `
-          #rv-ribbon-helper {
+          #rv-element-helper {
             position: fixed;
             bottom: 20px;
             left: 20px;
@@ -7046,25 +7085,25 @@ ${escapeHtml(JSON.stringify(a.parameters, null, 2))}
             transition: all .2s ease;
           }
 
-          #rv-ribbon-helper:hover {
+          #rv-element-helper:hover {
             opacity: 1 !important;
             transform: scale(1.03);
           }
 
-          .rv-ribbon-helper-title {
+          .rv-element-helper-title {
             font-weight: bold;
             margin-bottom: 6px;
             color: #6aa9ff;
             font-size: 14px;
           }
 
-          .rv-ribbon-helper-text {
+          .rv-element-helper-text {
             font-size: 12px;
             color: #ccc;
             line-height: 1.5;
           }
 
-          .rv-ribbon-helper-hotkey {
+          .rv-element-helper-hotkey {
             margin-top: 10px;
             background: #6aa9ff;
             color: black;
@@ -7074,23 +7113,44 @@ ${escapeHtml(JSON.stringify(a.parameters, null, 2))}
             border-radius: 8px;
             font-size: 14px;
           }
+
+          #rv-deactivate-btn {
+            margin-top: 10px;
+            width: 100%;
+            background: #ff6b6b;
+            color: #000;
+            border: 0;
+            border-radius: 8px;
+            padding: 7px 0;
+            font-weight: bold;
+            font-size: 13px;
+            cursor: pointer;
+            font-family: Arial, sans-serif;
+          }
+
+          #rv-deactivate-btn:hover {
+            background: #ff4444;
+          }
         `;
 
         document.head.appendChild(style);
 
         const helper = document.createElement("div");
-        helper.id = "rv-ribbon-helper";
+        helper.id = "rv-element-helper";
 
         helper.innerHTML = `
-          <div class="rv-ribbon-helper-title">🎀 Ribbon Deep Inspector</div>
-          <div class="rv-ribbon-helper-text">
+          <div class="rv-element-helper-title">🔍 Element Inspector</div>
+          <div class="rv-element-helper-text">
             Hover ribbon button<br>
             then press
           </div>
-          <div class="rv-ribbon-helper-hotkey">ALT + SHIFT</div>
+          <div class="rv-element-helper-hotkey">ALT + SHIFT</div>
+          <button id="rv-deactivate-btn">⏹ Deactivate</button>
         `;
 
         document.body.appendChild(helper);
+
+        document.getElementById("rv-deactivate-btn").onclick = deactivate;
 
         setTimeout(() => {
           helper.style.opacity = "0.15";
@@ -7107,6 +7167,8 @@ ${escapeHtml(JSON.stringify(a.parameters, null, 2))}
     }
   });
 });
+
+
 
 
 document.getElementById("openRecordByGuidUi").addEventListener("click", async () => {
@@ -8053,5 +8115,979 @@ document.getElementById("whyDidThisHappenUi").addEventListener("click", async ()
   });
 });
 
+
+
+document.getElementById("pluginPipelineVisualizer")?.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({
+    active: true,
+    currentWindow: true
+  });
+
+  if (!tab?.id) {
+    alert("No active tab found.");
+    return;
+  }
+
+  const frameResults = await chrome.scripting.executeScript({
+    target: {
+      tabId: tab.id,
+      allFrames: true
+    },
+    world: "MAIN",
+    func: () => ({
+      hasXrm: !!window.Xrm,
+      href: location.href
+    })
+  });
+
+  const targetFrame = frameResults.find(r => r.result?.hasXrm);
+
+  if (!targetFrame) {
+    alert("Could not find Dynamics frame.");
+    return;
+  }
+
+  await chrome.scripting.executeScript({
+    target: {
+      tabId: tab.id,
+      frameIds: [targetFrame.frameId]
+    },
+    world: "MAIN",
+    func: () => {
+      document.getElementById("rv-plugin-pipeline-popup")?.remove();
+
+      showPluginPipelinePopup();
+
+      function getClientUrl() {
+        return Xrm.Utility.getGlobalContext().getClientUrl();
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function removePopup() {
+        document.getElementById("rv-plugin-pipeline-popup")?.remove();
+      }
+
+      function injectStyle() {
+        if (document.getElementById("rv-plugin-pipeline-style")) return;
+
+        const style = document.createElement("style");
+        style.id = "rv-plugin-pipeline-style";
+
+        style.textContent = `
+          #rv-plugin-pipeline-popup {
+            position: fixed;
+            top: 18px;
+            left: 18px;
+            width: 900px;
+            max-width: calc(100vw - 36px);
+            max-height: calc(100vh - 36px);
+            background: #1f1f1f;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 14px;
+            z-index: 999999999;
+            font-family: Arial, sans-serif;
+            box-shadow: 0 12px 40px rgba(0,0,0,.55);
+            direction: rtl;
+            overflow: hidden;
+          }
+
+          .rv-pipe-head {
+            padding: 14px 16px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #1f1f1f;
+          }
+
+          .rv-pipe-head h2 {
+            margin: 0;
+            font-size: 18px;
+          }
+
+          .rv-pipe-close {
+            background: transparent;
+            border: 0;
+            color: white;
+            font-size: 26px;
+            cursor: pointer;
+          }
+
+          .rv-pipe-body {
+            padding: 16px;
+            overflow-y: auto;
+            max-height: calc(100vh - 120px);
+          }
+
+          .rv-pipe-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 10px;
+            margin-bottom: 14px;
+          }
+
+          .rv-pipe-input,
+          .rv-pipe-select {
+            background: #2a2a2a;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 13px;
+          }
+
+          .rv-pipe-btn {
+            background: #6aa9ff;
+            color: black;
+            border: 0;
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-weight: bold;
+            cursor: pointer;
+          }
+
+          .rv-pipe-stage {
+            margin-top: 16px;
+            border: 1px solid #333;
+            border-radius: 12px;
+            overflow: hidden;
+          }
+
+          .rv-pipe-stage-title {
+            background: #2b2b2b;
+            color: #6aa9ff;
+            padding: 10px 12px;
+            font-weight: bold;
+          }
+
+          .rv-pipe-step {
+            padding: 12px;
+            border-top: 1px solid #333;
+            direction: ltr;
+            text-align: left;
+            background: #242424;
+          }
+
+          .rv-pipe-step-title {
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 6px;
+          }
+
+          .rv-pipe-meta {
+            color: #ccc;
+            font-size: 12px;
+            white-space: pre-wrap;
+            line-height: 1.5;
+          }
+
+          .rv-pipe-empty {
+            padding: 12px;
+            color: #aaa;
+            background: #242424;
+            direction: ltr;
+            text-align: left;
+            border-radius: 8px;
+          }
+
+          .rv-pipe-badge {
+            display: inline-block;
+            padding: 3px 7px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-right: 6px;
+            background: #444;
+            color: white;
+          }
+
+          .rv-pipe-on {
+            background: #236b35;
+          }
+
+          .rv-pipe-off {
+            background: #7a2a2a;
+          }
+        `;
+
+        document.head.appendChild(style);
+      }
+
+      function showPluginPipelinePopup() {
+        injectStyle();
+        removePopup();
+
+        const popup = document.createElement("div");
+        popup.id = "rv-plugin-pipeline-popup";
+
+        popup.innerHTML = `
+          <div class="rv-pipe-head">
+            <button class="rv-pipe-close" id="rv-pipe-close">×</button>
+            <h2>Plugin Pipeline Visualizer 🧩</h2>
+          </div>
+
+          <div class="rv-pipe-body">
+            <div class="rv-pipe-row">
+              <button id="rv-pipe-run" class="rv-pipe-btn">Load</button>
+
+              <select id="rv-pipe-message" class="rv-pipe-select">
+                <option value="Create">Create</option>
+                <option value="Update">Update</option>
+                <option value="Delete">Delete</option>
+                <option value="Retrieve">Retrieve</option>
+                <option value="RetrieveMultiple">RetrieveMultiple</option>
+                <option value="Assign">Assign</option>
+                <option value="SetState">SetState</option>
+              </select>
+
+              <input id="rv-pipe-entity" class="rv-pipe-input" placeholder="Entity logical name, example: ey_case" />
+            </div>
+
+            <div id="rv-pipe-results"></div>
+          </div>
+        `;
+
+        document.body.appendChild(popup);
+
+        document.getElementById("rv-pipe-close").onclick = removePopup;
+        document.getElementById("rv-pipe-run").onclick = runPipelineSearch;
+      }
+
+      async function runPipelineSearch() {
+        const entityName = document.getElementById("rv-pipe-entity").value.trim();
+        const messageName = document.getElementById("rv-pipe-message").value;
+        const results = document.getElementById("rv-pipe-results");
+
+        if (!entityName) {
+          alert("Insert entity logical name.");
+          return;
+        }
+
+        results.innerHTML = `<div class="rv-pipe-empty">Loading...</div>`;
+
+        try {
+          const steps = await retrievePluginSteps(entityName, messageName);
+          renderPipeline(steps, entityName, messageName);
+        } catch (e) {
+          results.innerHTML = `<div class="rv-pipe-empty">${escapeHtml(e.message || String(e))}</div>`;
+        }
+      }
+
+      async function getEntityObjectTypeCode(entityName) {
+        const url =
+          `${getClientUrl()}/api/data/v9.2/EntityDefinitions(LogicalName='${entityName}')?$select=ObjectTypeCode`;
+
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0"
+          }
+        });
+
+        const text = await response.text();
+
+        if (!response.ok) {
+          throw new Error(text);
+        }
+
+        const json = JSON.parse(text);
+
+        if (json.ObjectTypeCode === null || json.ObjectTypeCode === undefined) {
+          throw new Error("Could not resolve ObjectTypeCode for entity: " + entityName);
+        }
+
+        return json.ObjectTypeCode;
+      }
+
+      async function retrievePluginSteps(entityName, messageName) {
+        const objectTypeCode = await getEntityObjectTypeCode(entityName);
+
+        const fetchXml = `
+<fetch>
+  <entity name="sdkmessageprocessingstep">
+    <attribute name="name" />
+    <attribute name="stage" />
+    <attribute name="mode" />
+    <attribute name="rank" />
+    <attribute name="statecode" />
+    <attribute name="filteringattributes" />
+    <attribute name="configuration" />
+    <attribute name="asyncautodelete" />
+
+    <order attribute="stage" />
+    <order attribute="rank" />
+
+    <link-entity name="sdkmessagefilter" from="sdkmessagefilterid" to="sdkmessagefilterid" link-type="inner" alias="filter">
+      <attribute name="primaryobjecttypecode" />
+      <filter>
+        <condition attribute="primaryobjecttypecode" operator="eq" value="${objectTypeCode}" />
+      </filter>
+    </link-entity>
+
+    <link-entity name="sdkmessage" from="sdkmessageid" to="sdkmessageid" link-type="inner" alias="message">
+      <attribute name="name" />
+      <filter>
+        <condition attribute="name" operator="eq" value="${messageName}" />
+      </filter>
+    </link-entity>
+
+    <link-entity name="plugintype" from="plugintypeid" to="plugintypeid" link-type="outer" alias="ptype">
+      <attribute name="typename" />
+      <attribute name="friendlyname" />
+
+      <link-entity name="pluginassembly" from="pluginassemblyid" to="pluginassemblyid" link-type="outer" alias="assembly">
+        <attribute name="name" />
+        <attribute name="version" />
+      </link-entity>
+    </link-entity>
+  </entity>
+</fetch>`.trim();
+
+        const url =
+          `${getClientUrl()}/api/data/v9.2/sdkmessageprocessingsteps` +
+          `?fetchXml=${encodeURIComponent(fetchXml)}`;
+
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            Prefer: 'odata.include-annotations="*"'
+          }
+        });
+
+        const text = await response.text();
+
+        if (!response.ok) {
+          throw new Error(text);
+        }
+
+        return JSON.parse(text).value || [];
+      }
+
+      function getAliased(row, key) {
+        return row[key] ?? row[`${key}@OData.Community.Display.V1.FormattedValue`] ?? "";
+      }
+
+      function stageName(stage) {
+        const value = Number(stage);
+
+        if (value === 10) return "PreValidation";
+        if (value === 20) return "PreOperation";
+        if (value === 30) return "MainOperation";
+        if (value === 40) return "PostOperation";
+
+        return `Stage ${stage}`;
+      }
+
+      function modeName(mode) {
+        return Number(mode) === 1 ? "Async" : "Sync";
+      }
+
+      function renderPipeline(steps, entityName, messageName) {
+        const results = document.getElementById("rv-pipe-results");
+
+        if (!steps.length) {
+          results.innerHTML = `
+            <div class="rv-pipe-empty">
+              No plugin steps found for ${escapeHtml(entityName)} / ${escapeHtml(messageName)}.
+            </div>
+          `;
+          return;
+        }
+
+        const stages = [10, 20, 30, 40];
+
+        results.innerHTML = `
+          <div class="rv-pipe-empty">
+            Found ${steps.length} step(s) for ${escapeHtml(entityName)} / ${escapeHtml(messageName)}
+          </div>
+          ${stages.map(stage =>
+            renderStage(stage, steps.filter(s => Number(s.stage) === stage))
+          ).join("")}
+        `;
+      }
+
+      function renderStage(stage, steps) {
+        return `
+          <div class="rv-pipe-stage">
+            <div class="rv-pipe-stage-title">${stageName(stage)}</div>
+            ${
+              steps.length
+                ? steps.map(renderStep).join("")
+                : `<div class="rv-pipe-empty">No steps</div>`
+            }
+          </div>
+        `;
+      }
+
+      function renderStep(step) {
+        const enabled = Number(step.statecode) === 0;
+
+        const pluginType =
+          getAliased(step, "ptype.typename") ||
+          getAliased(step, "ptype.friendlyname") ||
+          "";
+
+        const assembly =
+          getAliased(step, "assembly.name") ||
+          "";
+
+        const assemblyVersion =
+          getAliased(step, "assembly.version") ||
+          "";
+
+        return `
+          <div class="rv-pipe-step">
+            <div class="rv-pipe-step-title">
+              ${escapeHtml(step.name)}
+              <span class="rv-pipe-badge ${enabled ? "rv-pipe-on" : "rv-pipe-off"}">
+                ${enabled ? "Enabled" : "Disabled"}
+              </span>
+              <span class="rv-pipe-badge">${escapeHtml(modeName(step.mode))}</span>
+              <span class="rv-pipe-badge">Rank ${escapeHtml(step.rank)}</span>
+            </div>
+
+            <div class="rv-pipe-meta">
+Stage: ${escapeHtml(stageName(step.stage))}
+Plugin Type: ${escapeHtml(pluginType)}
+Assembly: ${escapeHtml(assembly)} ${escapeHtml(assemblyVersion)}
+Filtering Attributes: ${escapeHtml(step.filteringattributes || "-")}
+Configuration: ${escapeHtml(step.configuration || "-")}
+Async Auto Delete: ${escapeHtml(step.asyncautodelete ?? "-")}
+            </div>
+          </div>
+        `;
+      }
+    }
+  });
+});
+
+document.getElementById("pluginTraceExplorer")?.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({
+    active: true,
+    currentWindow: true
+  });
+
+  if (!tab?.id) {
+    alert("No active tab found.");
+    return;
+  }
+
+  const frameResults = await chrome.scripting.executeScript({
+    target: {
+      tabId: tab.id,
+      allFrames: true
+    },
+    world: "MAIN",
+    func: () => ({
+      hasXrm: !!window.Xrm,
+      href: location.href
+    })
+  });
+
+  const targetFrame = frameResults.find(r => r.result?.hasXrm);
+
+  if (!targetFrame) {
+    alert("Could not find Dynamics frame.");
+    return;
+  }
+
+  await chrome.scripting.executeScript({
+    target: {
+      tabId: tab.id,
+      frameIds: [targetFrame.frameId]
+    },
+    world: "MAIN",
+    func: () => {
+      document.getElementById("rv-plugin-trace-popup")?.remove();
+      showPluginTracePopup();
+
+      function getClientUrl() {
+        return Xrm.Utility.getGlobalContext().getClientUrl();
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function removePopup() {
+        document.getElementById("rv-plugin-trace-popup")?.remove();
+      }
+
+      function injectStyle() {
+        if (document.getElementById("rv-plugin-trace-style")) return;
+
+        const style = document.createElement("style");
+        style.id = "rv-plugin-trace-style";
+
+        style.textContent = `
+          #rv-plugin-trace-popup {
+            position: fixed;
+            top: 18px;
+            left: 18px;
+            width: 980px;
+            max-width: calc(100vw - 36px);
+            max-height: calc(100vh - 36px);
+            background: #1f1f1f;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 14px;
+            z-index: 999999999;
+            font-family: Arial, sans-serif;
+            box-shadow: 0 12px 40px rgba(0,0,0,.55);
+            direction: rtl;
+            overflow: hidden;
+          }
+
+          .rv-trace-head {
+            padding: 14px 16px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #1f1f1f;
+          }
+
+          .rv-trace-head h2 {
+            margin: 0;
+            font-size: 18px;
+          }
+
+          .rv-trace-close {
+            background: transparent;
+            border: 0;
+            color: white;
+            font-size: 26px;
+            cursor: pointer;
+          }
+
+          .rv-trace-body {
+            padding: 16px;
+            overflow-y: auto;
+            max-height: calc(100vh - 120px);
+          }
+
+          .rv-trace-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1.4fr auto;
+            gap: 10px;
+            margin-bottom: 10px;
+          }
+
+          .rv-trace-grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr auto;
+            gap: 10px;
+            margin-bottom: 14px;
+          }
+
+          .rv-trace-input,
+          .rv-trace-select {
+            background: #2a2a2a;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 13px;
+          }
+
+          .rv-trace-btn {
+            background: #6aa9ff;
+            color: black;
+            border: 0;
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-weight: bold;
+            cursor: pointer;
+          }
+
+          .rv-trace-btn-secondary {
+            background: #444;
+            color: white;
+          }
+
+          .rv-trace-card {
+            background: #242424;
+            border: 1px solid #333;
+            border-radius: 12px;
+            margin-bottom: 14px;
+            overflow: hidden;
+            direction: ltr;
+            text-align: left;
+          }
+
+          .rv-trace-card-head {
+            background: #2b2b2b;
+            padding: 10px 12px;
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            align-items: center;
+          }
+
+          .rv-trace-title {
+            font-weight: bold;
+            color: #fff;
+            word-break: break-word;
+          }
+
+          .rv-trace-meta {
+            padding: 10px 12px;
+            color: #ccc;
+            font-size: 12px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+          }
+
+          .rv-trace-section-title {
+            color: #6aa9ff;
+            font-weight: bold;
+            margin: 10px 12px 6px;
+            font-size: 13px;
+          }
+
+          .rv-trace-box {
+            background: #1b1b1b;
+            color: #ddd;
+            border: 1px solid #333;
+            border-radius: 8px;
+            margin: 0 12px 12px;
+            padding: 10px;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 220px;
+            overflow: auto;
+          }
+
+          .rv-trace-empty {
+            padding: 12px;
+            color: #aaa;
+            background: #242424;
+            direction: ltr;
+            text-align: left;
+            border-radius: 8px;
+          }
+
+          .rv-trace-badge {
+            display: inline-block;
+            padding: 3px 7px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-right: 6px;
+            background: #444;
+            color: white;
+          }
+
+          .rv-trace-error {
+            background: #7a2a2a;
+          }
+
+          .rv-trace-ok {
+            background: #236b35;
+          }
+
+          .rv-trace-actions {
+            display: flex;
+            gap: 8px;
+            padding: 0 12px 12px;
+          }
+
+          .rv-trace-small-btn {
+            background: #444;
+            color: white;
+            border: 0;
+            border-radius: 8px;
+            padding: 8px 10px;
+            cursor: pointer;
+            font-size: 12px;
+          }
+        `;
+
+        document.head.appendChild(style);
+      }
+
+      function showPluginTracePopup() {
+        injectStyle();
+        removePopup();
+
+        const popup = document.createElement("div");
+        popup.id = "rv-plugin-trace-popup";
+
+        popup.innerHTML = `
+          <div class="rv-trace-head">
+            <button class="rv-trace-close" id="rv-trace-close">×</button>
+            <h2>Plugin Trace Explorer 🧾</h2>
+          </div>
+
+          <div class="rv-trace-body">
+            <div class="rv-trace-grid">
+              <input id="rv-trace-entity" class="rv-trace-input" placeholder="Entity, example: ey_case" />
+              <select id="rv-trace-message" class="rv-trace-select">
+                <option value="">Any Message</option>
+                <option value="Create">Create</option>
+                <option value="Update">Update</option>
+                <option value="Delete">Delete</option>
+                <option value="Retrieve">Retrieve</option>
+                <option value="RetrieveMultiple">RetrieveMultiple</option>
+                <option value="Assign">Assign</option>
+                <option value="SetState">SetState</option>
+              </select>
+              <input id="rv-trace-text" class="rv-trace-input" placeholder="Text contains / exception / correlation id" />
+              <button id="rv-trace-run" class="rv-trace-btn">Load</button>
+            </div>
+
+            <div class="rv-trace-grid-2">
+              <select id="rv-trace-errors" class="rv-trace-select">
+                <option value="all">All traces</option>
+                <option value="errors">Only errors</option>
+              </select>
+
+              <select id="rv-trace-limit" class="rv-trace-select">
+                <option value="20">Top 20</option>
+                <option value="50">Top 50</option>
+                <option value="100">Top 100</option>
+              </select>
+
+              <select id="rv-trace-days" class="rv-trace-select">
+                <option value="1">Last 1 day</option>
+                <option value="3">Last 3 days</option>
+                <option value="7">Last 7 days</option>
+                <option value="30">Last 30 days</option>
+              </select>
+
+              <button id="rv-trace-clear" class="rv-trace-btn rv-trace-btn-secondary">Clear</button>
+            </div>
+
+            <div id="rv-trace-results"></div>
+          </div>
+        `;
+
+        document.body.appendChild(popup);
+
+        document.getElementById("rv-trace-close").onclick = removePopup;
+        document.getElementById("rv-trace-run").onclick = runTraceSearch;
+        document.getElementById("rv-trace-clear").onclick = () => {
+          document.getElementById("rv-trace-results").innerHTML = "";
+        };
+      }
+
+      async function runTraceSearch() {
+        const entity = document.getElementById("rv-trace-entity").value.trim();
+        const message = document.getElementById("rv-trace-message").value;
+        const text = document.getElementById("rv-trace-text").value.trim();
+        const errorsMode = document.getElementById("rv-trace-errors").value;
+        const limit = Number(document.getElementById("rv-trace-limit").value || 20);
+        const days = Number(document.getElementById("rv-trace-days").value || 1);
+        const results = document.getElementById("rv-trace-results");
+
+        results.innerHTML = `<div class="rv-trace-empty">Loading...</div>`;
+
+        try {
+          const traces = await retrievePluginTraceLogs({
+            entity,
+            message,
+            text,
+            onlyErrors: errorsMode === "errors",
+            limit,
+            days
+          });
+
+          renderTraces(traces);
+        } catch (e) {
+          results.innerHTML = `<div class="rv-trace-empty">${escapeHtml(e.message || String(e))}</div>`;
+        }
+      }
+
+      async function retrievePluginTraceLogs({ entity, message, text, onlyErrors, limit, days }) {
+        const fromDate = new Date();
+        fromDate.setDate(fromDate.getDate() - days);
+
+        const conditions = [];
+
+        conditions.push(
+          `<condition attribute="createdon" operator="on-or-after" value="${fromDate.toISOString()}" />`
+        );
+
+        if (entity) {
+          conditions.push(
+            `<condition attribute="primaryentity" operator="eq" value="${escapeXml(entity)}" />`
+          );
+        }
+
+        if (message) {
+          conditions.push(
+            `<condition attribute="messagename" operator="eq" value="${escapeXml(message)}" />`
+          );
+        }
+
+        if (onlyErrors) {
+          conditions.push(
+            `<condition attribute="exceptiondetails" operator="not-null" />`
+          );
+        }
+
+        const textFilter = text
+          ? `
+            <filter type="or">
+              <condition attribute="exceptiondetails" operator="like" value="%${escapeXml(text)}%" />
+              <condition attribute="messageblock" operator="like" value="%${escapeXml(text)}%" />
+              <condition attribute="correlationid" operator="eq" value="${escapeXml(text)}" />
+              <condition attribute="typename" operator="like" value="%${escapeXml(text)}%" />
+            </filter>
+          `
+          : "";
+
+        const fetchXml = `
+<fetch count="${limit}">
+  <entity name="plugintracelog">
+    <attribute name="plugintracelogid" />
+    <attribute name="typename" />
+    <attribute name="messagename" />
+    <attribute name="primaryentity" />
+    <attribute name="correlationid" />
+    <attribute name="depth" />
+    <attribute name="mode" />
+    <attribute name="operationtype" />
+    <attribute name="performanceexecutionstarttime" />
+    <attribute name="performanceexecutionduration" />
+    <attribute name="exceptiondetails" />
+    <attribute name="messageblock" />
+    <attribute name="createdon" />
+
+    <order attribute="createdon" descending="true" />
+
+    <filter type="and">
+      ${conditions.join("\n")}
+      ${textFilter}
+    </filter>
+  </entity>
+</fetch>`.trim();
+
+        const url =
+          `${getClientUrl()}/api/data/v9.2/plugintracelogs` +
+          `?fetchXml=${encodeURIComponent(fetchXml)}`;
+
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            Prefer: 'odata.include-annotations="*"'
+          }
+        });
+
+        const responseText = await response.text();
+
+        if (!response.ok) {
+          throw new Error(responseText);
+        }
+
+        return JSON.parse(responseText).value || [];
+      }
+
+      function escapeXml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&apos;");
+      }
+
+      function modeName(mode) {
+        const n = Number(mode);
+        if (n === 0) return "Sync";
+        if (n === 1) return "Async";
+        return mode ?? "-";
+      }
+
+      function renderTraces(traces) {
+        const results = document.getElementById("rv-trace-results");
+
+        if (!traces.length) {
+          results.innerHTML = `<div class="rv-trace-empty">No plugin trace logs found.</div>`;
+          return;
+        }
+
+        results.innerHTML = traces.map(renderTrace).join("");
+
+        traces.forEach((trace, index) => {
+          document.getElementById(`rv-trace-copy-error-${index}`)?.addEventListener("click", async () => {
+            await navigator.clipboard.writeText(trace.exceptiondetails || "");
+            alert("Copied error");
+          });
+
+          document.getElementById(`rv-trace-copy-full-${index}`)?.addEventListener("click", async () => {
+            await navigator.clipboard.writeText(JSON.stringify(trace, null, 2));
+            alert("Copied full trace JSON");
+          });
+        });
+      }
+
+      function renderTrace(trace, index) {
+        const hasError = !!trace.exceptiondetails;
+
+        return `
+          <div class="rv-trace-card">
+            <div class="rv-trace-card-head">
+              <div class="rv-trace-title">
+                ${escapeHtml(trace.typename || "-")}
+              </div>
+              <div>
+                <span class="rv-trace-badge ${hasError ? "rv-trace-error" : "rv-trace-ok"}">
+                  ${hasError ? "Error" : "OK"}
+                </span>
+                <span class="rv-trace-badge">${escapeHtml(trace.messagename || "-")}</span>
+                <span class="rv-trace-badge">${escapeHtml(trace.primaryentity || "-")}</span>
+              </div>
+            </div>
+
+            <div class="rv-trace-meta">
+Created On: ${escapeHtml(trace["createdon@OData.Community.Display.V1.FormattedValue"] || trace.createdon || "-")}
+Correlation Id: ${escapeHtml(trace.correlationid || "-")}
+Depth: ${escapeHtml(trace.depth ?? "-")}
+Mode: ${escapeHtml(modeName(trace.mode))}
+Operation Type: ${escapeHtml(trace.operationtype ?? "-")}
+Duration: ${escapeHtml(trace.performanceexecutionduration ?? "-")} ms
+Start Time: ${escapeHtml(trace["performanceexecutionstarttime@OData.Community.Display.V1.FormattedValue"] || trace.performanceexecutionstarttime || "-")}
+            </div>
+
+            <div class="rv-trace-section-title">Exception Details</div>
+            <div class="rv-trace-box">${escapeHtml(trace.exceptiondetails || "-")}</div>
+
+            <div class="rv-trace-section-title">Message Block</div>
+            <div class="rv-trace-box">${escapeHtml(trace.messageblock || "-")}</div>
+
+            <div class="rv-trace-actions">
+              <button class="rv-trace-small-btn" id="rv-trace-copy-error-${index}">Copy Error</button>
+              <button class="rv-trace-small-btn" id="rv-trace-copy-full-${index}">Copy Full JSON</button>
+            </div>
+          </div>
+        `;
+      }
+    }
+  });
+});
 
 
