@@ -1,7 +1,32 @@
 // popup.js
 
+// Performance pass by ChatGPT: keeps all HTML-facing handler IDs/names intact.
+// Main changes: lighter API usage, bounded background loading, cache reuse, safer pagination, and one-query role privilege lookup.
+
+const __D365_PERF_CACHE_TTL_MS = 10 * 60 * 1000;
+const __d365PerfCache = new Map();
+
+function __d365CacheGet(key) {
+  const hit = __d365PerfCache.get(key);
+  if (!hit || (Date.now() - hit.t) > __D365_PERF_CACHE_TTL_MS) {
+    __d365PerfCache.delete(key);
+    return null;
+  }
+  return hit.v;
+}
+
+function __d365CacheSet(key, value) {
+  __d365PerfCache.set(key, { t: Date.now(), v: value });
+  return value;
+}
+
+async function __d365GetActiveTab() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs?.[0] || null;
+}
+
 document.getElementById("ribbondebug").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id || !tab?.url) return;
 
   if (tab.url.includes("ribbondebug=true")) return;
@@ -11,7 +36,7 @@ document.getElementById("ribbondebug").addEventListener("click", async () => {
 });
 
 document.getElementById("tabsname").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   // 1) Collect tabs via Xrm from ALL frames
@@ -202,7 +227,7 @@ const text =
 });
 
 document.getElementById("getFieldValue").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   const input = prompt("Enter field logical names separated by comma:\nexample: firstname,lastname,emailaddress1");
@@ -298,7 +323,7 @@ document.getElementById("getFieldValue").addEventListener("click", async () => {
 // If the user leaves "Fields" empty -> retrieveRecord WITHOUT $select (returns the full object)
 
 document.getElementById("retrieveByIdUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -553,7 +578,7 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
 // Requires a button in popup.html: <button id="retrieveMultipleUi">RetrieveMultiple</button>
 
 document.getElementById("retrieveMultiple").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -906,7 +931,7 @@ document.getElementById("retrieveMultiple").addEventListener("click", async () =
 // 2) Paste this whole block into popup.js
 
 document.getElementById("fetchXmlUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -1213,7 +1238,7 @@ document.getElementById("fetchXmlUi").addEventListener("click", async () => {
 
 
 document.getElementById("findLogicalByLabel").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -1423,7 +1448,7 @@ document.getElementById("findLogicalByLabel").addEventListener("click", async ()
   });
 });
 document.getElementById("findLabelByLogical").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -1630,7 +1655,7 @@ document.getElementById("findLabelByLogical").addEventListener("click", async ()
   });
 });
 document.getElementById("getSystemParam").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -1841,7 +1866,7 @@ document.getElementById("getSystemParam").addEventListener("click", async () => 
   });
 });
 document.getElementById("shareExt").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -2004,7 +2029,7 @@ document.getElementById("shareExt").addEventListener("click", async () => {
   });
 });
 document.getElementById("openAdvancedFind").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id || !tab?.url) return;
 
   try {
@@ -2029,7 +2054,7 @@ document.getElementById("openAdvancedFind").addEventListener("click", async () =
   }
 });
 document.getElementById("searchSystemParams").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -2258,7 +2283,7 @@ document.getElementById("searchSystemParams").addEventListener("click", async ()
   });
 });
 document.getElementById("showDirtyFields").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -2507,39 +2532,55 @@ document.getElementById("openDefaultView")?.addEventListener("click", async () =
             "?$select=LogicalName,DisplayName,ObjectTypeCode,IsCustomEntity,IsActivity,IsIntersect" +
             "&$filter=IsIntersect eq false";
 
-          const response = await fetch(url, {
-            method: "GET",
-            headers: {
-              "Accept": "application/json",
-              "Content-Type": "application/json; charset=utf-8",
-              "OData-MaxVersion": "4.0",
-              "OData-Version": "4.0"
+          const cacheKey = "__d365_entity_defs_v2:" + clientUrl;
+          const ttlMs = 10 * 60 * 1000;
+          let entities = null;
+
+          try {
+            const cached = JSON.parse(sessionStorage.getItem(cacheKey) || "null");
+            if (cached && Date.now() - cached.t < ttlMs && Array.isArray(cached.entities)) {
+              entities = cached.entities;
             }
-          });
+          } catch {}
 
-          if (!response.ok) {
+          if (!entities) {
+            const response = await fetch(url, {
+              method: "GET",
+              headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
+                "OData-MaxVersion": "4.0",
+                "OData-Version": "4.0",
+                "Prefer": "odata.maxpagesize=5000"
+              }
+            });
 
-            const text = await response.text();
+            if (!response.ok) {
 
-            throw new Error(text);
+              const text = await response.text();
+
+              throw new Error(text);
+            }
+
+            const json = await response.json();
+
+            entities = json.value
+              .map(e => ({
+                logicalName: e.LogicalName,
+                displayName:
+                  e.DisplayName?.UserLocalizedLabel?.Label ||
+                  e.LogicalName,
+                objectTypeCode: e.ObjectTypeCode,
+                isCustom: e.IsCustomEntity,
+                isActivity: e.IsActivity
+              }))
+              .filter(e => e.logicalName)
+              .sort((a, b) =>
+                a.displayName.localeCompare(b.displayName)
+              );
+
+            try { sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), entities })); } catch {}
           }
-
-          const json = await response.json();
-
-          const entities = json.value
-            .map(e => ({
-              logicalName: e.LogicalName,
-              displayName:
-                e.DisplayName?.UserLocalizedLabel?.Label ||
-                e.LogicalName,
-              objectTypeCode: e.ObjectTypeCode,
-              isCustom: e.IsCustomEntity,
-              isActivity: e.IsActivity
-            }))
-            .filter(e => e.logicalName)
-            .sort((a, b) =>
-              a.displayName.localeCompare(b.displayName)
-            );
 
           return {
             ok: true,
@@ -2995,9 +3036,10 @@ function showEntityPickerPopup(
     }
   });
 
+  let renderTimer = 0;
   searchInput.addEventListener("input", () => {
-
-    render(searchInput.value);
+    clearTimeout(renderTimer);
+    renderTimer = setTimeout(() => render(searchInput.value), 80);
   });
 
   manualBtn.addEventListener("click", () => {
@@ -3026,7 +3068,7 @@ function showEntityPickerPopup(
 
 
 document.getElementById("getRolePermissions").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -3392,10 +3434,24 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
   try {
     status.textContent = "⏳ Loading parent BU roles and entities...";
 
-    const buRows = await retrieveAll(
+    const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+    const cachePrefix = "__d365_role_permissions_options_v2:" + clientUrl + ":";
+    const ttlMs = 10 * 60 * 1000;
+    const readCache = (k) => {
+      try {
+        const hit = JSON.parse(sessionStorage.getItem(cachePrefix + k) || "null");
+        return hit && Date.now() - hit.t < ttlMs ? hit.v : null;
+      } catch { return null; }
+    };
+    const writeCache = (k, v) => {
+      try { sessionStorage.setItem(cachePrefix + k, JSON.stringify({ t: Date.now(), v })); } catch {}
+      return v;
+    };
+
+    const buRows = readCache("businessunits") || writeCache("businessunits", await retrieveAll(
       "businessunit",
       "?$select=businessunitid,name,_parentbusinessunitid_value"
-    );
+    ));
 
     const parentBu = buRows.find(b => !b._parentbusinessunitid_value);
 
@@ -3406,12 +3462,12 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
 
     const parentBuId = parentBu.businessunitid.replace(/[{}]/g, "");
 
-    const roles = await retrieveAll(
+    const roles = readCache("roles:" + parentBuId) || writeCache("roles:" + parentBuId, await retrieveAll(
       "role",
       `?$select=roleid,name,_businessunitid_value
        &$filter=_businessunitid_value eq ${parentBuId}
        &$orderby=name asc`
-    );
+    ));
 
     rolesOptions = roles
       .filter(r => r.name && r.roleid)
@@ -3435,23 +3491,24 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
         };
       });
 
-    const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
-
-    const response = await fetch(
-      `${clientUrl}/api/data/v9.2/EntityDefinitions?$select=LogicalName,DisplayName`,
-      {
-        method: "GET",
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json; charset=utf-8",
-          "OData-MaxVersion": "4.0",
-          "OData-Version": "4.0",
-          "Prefer": "odata.include-annotations=*"
+    const cachedEntities = readCache("entities");
+    const data = cachedEntities || await (async () => {
+      const response = await fetch(
+        `${clientUrl}/api/data/v9.2/EntityDefinitions?$select=LogicalName,DisplayName`,
+        {
+          method: "GET",
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Prefer": "odata.include-annotations=*,odata.maxpagesize=5000"
+          }
         }
-      }
-    );
-
-    const data = await response.json();
+      );
+      const json = await response.json();
+      return writeCache("entities", json);
+    })();
 
     entitiesOptions = (data.value || [])
       .filter(e => e.LogicalName)
@@ -3639,7 +3696,7 @@ document.getElementById("getRolePermissions").addEventListener("click", async ()
 
 
 document.getElementById("getSystemRolesByPrivilege").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -4040,13 +4097,32 @@ document.getElementById("getSystemRolesByPrivilege").addEventListener("click", a
 
           const targetPrivId = normalizeGuid(privData.value[0].privilegeid);
 
-          const roleUrl = `${clientUrl}/api/data/v9.2/roles?$select=name,roleid`;
+          // Performance: the previous implementation loaded every role and then called
+          // RetrieveRolePrivilegesRole once per role. In environments with many roles this
+          // can mean hundreds/thousands of requests and popup hangs. This FetchXML does the
+          // join server-side and returns only roles that have the selected privilege/depth.
+          const fetchXml = `
+<fetch distinct="true" mapping="logical">
+  <entity name="role">
+    <attribute name="name" />
+    <order attribute="name" />
+    <link-entity name="roleprivileges" from="roleid" to="roleid" intersect="true" alias="rp">
+      <filter>
+        <condition attribute="privilegeid" operator="eq" value="${targetPrivId}" />
+        <condition attribute="privilegedepthmask" operator="eq" value="${wantedDepthValue}" />
+      </filter>
+    </link-entity>
+  </entity>
+</fetch>`;
+
+          const roleUrl = `${clientUrl}/api/data/v9.2/roles?fetchXml=${encodeURIComponent(fetchXml)}`;
           const roleRes = await fetch(roleUrl, {
             method: "GET",
             headers: {
               "Accept": "application/json",
               "OData-Version": "4.0",
-              "OData-MaxVersion": "4.0"
+              "OData-MaxVersion": "4.0",
+              "Prefer": "odata.maxpagesize=5000"
             },
             credentials: "same-origin"
           });
@@ -4056,38 +4132,7 @@ document.getElementById("getSystemRolesByPrivilege").addEventListener("click", a
           }
 
           const roleData = await roleRes.json();
-          const allRoles = roleData.value || [];
-
-          const checkRole = async (role) => {
-            try {
-              const url = `${clientUrl}/api/data/v9.2/RetrieveRolePrivilegesRole(RoleId=${role.roleid})`;
-              const res = await fetch(url, {
-                method: "GET",
-                headers: {
-                  "Accept": "application/json",
-                  "OData-Version": "4.0",
-                  "OData-MaxVersion": "4.0"
-                },
-                credentials: "same-origin"
-              });
-
-              if (!res.ok) return null;
-
-              const data = await res.json();
-              const privs = data.RolePrivileges || [];
-
-              const hit = privs.find(p => normalizeGuid(p.PrivilegeId) === targetPrivId);
-              if (hit && getDepthValue(hit.Depth) === wantedDepthValue) {
-                return role.name;
-              }
-            } catch (e) {
-              return null;
-            }
-            return null;
-          };
-
-          const rawResults = await Promise.all(allRoles.map(r => checkRole(r)));
-          const uniqueRoleNames = [...new Set(rawResults.filter(name => name !== null))].sort();
+          const uniqueRoleNames = [...new Set((roleData.value || []).map(r => r.name).filter(Boolean))].sort();
 
           const depthLabels = {
             "1": "USER",
@@ -4168,7 +4213,7 @@ document.getElementById("getSystemRolesByPrivilege").addEventListener("click", a
 
 
 document.getElementById("apiTesterUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -4886,7 +4931,7 @@ const res = await fetch(absoluteUrl, {
   });
 });
 document.getElementById("securityRolesUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -5388,7 +5433,7 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
 
 
 document.getElementById("quickUpdateFieldUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -5969,7 +6014,7 @@ async function getPrimaryNameField(entityLogicalName) {
 
 
 document.getElementById("formBeautifier")?.addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
 
   if (!tab?.id) {
     alert("No active tab found.");
@@ -7172,7 +7217,7 @@ ${escapeHtml(JSON.stringify(a.parameters, null, 2))}
 
 
 document.getElementById("openRecordByGuidUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -7428,7 +7473,7 @@ document.getElementById("openRecordByGuidUi").addEventListener("click", async ()
 });
 
 document.getElementById("whyDidThisHappenUi").addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
 
   await chrome.scripting.executeScript({
@@ -9091,3 +9136,687 @@ Start Time: ${escapeHtml(trace["performanceexecutionstarttime@OData.Community.Di
 });
 
 
+document.getElementById("fetchBuilderUi").addEventListener("click", async () => {
+  const tab = await __d365GetActiveTab();
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: false },
+    world: "MAIN",
+    func: async () => {
+      document.getElementById("__d365_fetch_builder")?.remove();
+
+      const escapeXml = (value) =>
+        String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&apos;");
+
+      const getLabel = (displayName, fallback) =>
+        displayName?.UserLocalizedLabel?.Label ||
+        displayName?.LocalizedLabels?.[0]?.Label ||
+        fallback ||
+        "";
+
+      const fetchAll = async (url) => {
+        const all = [];
+
+        while (url) {
+          const res = await fetch(url, {
+            headers: {
+              Accept: "application/json",
+              "OData-MaxVersion": "4.0",
+              "OData-Version": "4.0"
+            }
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            throw new Error(data?.error?.message || "Fetch failed");
+          }
+
+          all.push(...(data.value || []));
+          url = data["@odata.nextLink"] || null;
+        }
+
+        return all;
+      };
+
+      const state = {
+        entities: [],
+        fields: [],
+        entity: null,
+        filterType: "and",
+        selectedColumns: [],
+        conditions: []
+      };
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365_fetch_builder";
+      overlay.style.cssText = `
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        background: rgba(0,0,0,.35);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        direction: ltr;
+      `;
+
+      const box = document.createElement("div");
+      box.style.cssText = `
+        width: min(1200px, 96vw);
+        height: min(880px, 94vh);
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 18px 50px rgba(0,0,0,.35);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      `;
+
+      box.innerHTML = `
+        <div style="padding:14px 16px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-weight:900;font-size:16px;">🧱 Fetch Builder</div>
+          <button id="fbClose" style="border:1px solid #cbd5e1;background:#fff;border-radius:10px;padding:8px 12px;font-weight:700;cursor:pointer;">Close</button>
+        </div>
+
+        <div style="padding:14px 16px;display:grid;grid-template-columns:1fr 1fr;gap:14px;overflow:auto;">
+          <div style="display:grid;gap:8px;">
+            <label style="font-weight:800;">Entity</label>
+            <input id="fbEntitySearch" placeholder="Search entity by display name / logical name"
+              style="border:1px solid #cbd5e1;border-radius:10px;padding:10px;" />
+            <select id="fbEntitySelect" size="8"
+              style="border:1px solid #cbd5e1;border-radius:10px;padding:8px;"></select>
+          </div>
+
+          <div style="display:grid;gap:8px;">
+            <label style="font-weight:800;">Columns</label>
+            <input id="fbFieldSearch" placeholder="Search fields by display name / schema / logical name"
+              style="border:1px solid #cbd5e1;border-radius:10px;padding:10px;" />
+
+            <div id="fbColumnsSelect"
+              style="border:1px solid #cbd5e1;border-radius:10px;padding:8px;height:180px;overflow:auto;display:grid;gap:6px;">
+            </div>
+
+            <div id="fbSelectedColumns" style="font-size:12px;color:#475569;">
+              Selected: 0
+            </div>
+          </div>
+
+          <div style="grid-column:1 / -1;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <label style="font-weight:800;">Filter type:</label>
+
+            <select id="fbFilterType" style="border:1px solid #cbd5e1;border-radius:10px;padding:8px;">
+              <option value="and">AND</option>
+              <option value="or">OR</option>
+            </select>
+
+            <button id="fbAddCondition"
+              style="border:none;background:#2563eb;color:#fff;border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;">
+              + Add condition
+            </button>
+
+            <button id="fbGenerate"
+              style="border:none;background:#16a34a;color:#fff;border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;">
+              Generate FetchXML
+            </button>
+
+            <button id="fbCopy"
+              style="border:1px solid #cbd5e1;background:#fff;border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;">
+              Copy
+            </button>
+          </div>
+
+          <div style="grid-column:1 / -1;">
+            <div style="font-weight:800;margin-bottom:8px;">Conditions</div>
+            <div id="fbConditions" style="display:grid;gap:10px;"></div>
+          </div>
+
+          <div style="grid-column:1 / -1;">
+            <label style="font-weight:800;">FetchXML</label>
+            <textarea id="fbOutput" readonly
+              style="margin-top:8px;width:100%;height:260px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:10px;padding:10px;font-family:Consolas,Monaco,'Courier New',monospace;font-size:12px;direction:ltr;text-align:left;"></textarea>
+          </div>
+        </div>
+      `;
+
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      const $ = (selector) => box.querySelector(selector);
+
+      const entitySearch = $("#fbEntitySearch");
+      const entitySelect = $("#fbEntitySelect");
+      const fieldSearch = $("#fbFieldSearch");
+      const columnsSelect = $("#fbColumnsSelect");
+      const selectedColumnsLabel = $("#fbSelectedColumns");
+      const conditionsWrap = $("#fbConditions");
+      const output = $("#fbOutput");
+
+      $("#fbClose").onclick = () => overlay.remove();
+
+      const getOperatorsByType = (type) => {
+        const t = String(type || "").toLowerCase();
+
+        if (t.includes("string") || t.includes("memo")) {
+          return [
+            ["eq", "Equals"],
+            ["ne", "Not Equals"],
+            ["like", "Contains"],
+            ["not-like", "Does Not Contain"],
+            ["null", "Is Empty"],
+            ["not-null", "Is Not Empty"]
+          ];
+        }
+
+        if (t.includes("datetime")) {
+          return [
+            ["on", "On"],
+            ["on-or-after", "On Or After"],
+            ["on-or-before", "On Or Before"],
+            ["last-x-days", "Last X Days"],
+            ["next-x-days", "Next X Days"],
+            ["null", "Is Empty"],
+            ["not-null", "Is Not Empty"]
+          ];
+        }
+
+        if (
+          t.includes("picklist") ||
+          t.includes("state") ||
+          t.includes("status") ||
+          t.includes("boolean")
+        ) {
+          return [
+            ["eq", "Equals"],
+            ["ne", "Not Equals"],
+            ["null", "Is Empty"],
+            ["not-null", "Is Not Empty"]
+          ];
+        }
+
+        if (
+          t.includes("integer") ||
+          t.includes("decimal") ||
+          t.includes("double") ||
+          t.includes("money")
+        ) {
+          return [
+            ["eq", "Equals"],
+            ["ne", "Not Equals"],
+            ["gt", "Greater Than"],
+            ["ge", "Greater Or Equal"],
+            ["lt", "Less Than"],
+            ["le", "Less Or Equal"],
+            ["null", "Is Empty"],
+            ["not-null", "Is Not Empty"]
+          ];
+        }
+
+        if (t.includes("lookup") || t.includes("customer") || t.includes("owner")) {
+          return [
+            ["eq", "Equals GUID"],
+            ["ne", "Not Equals GUID"],
+            ["eq-userid", "Current User"],
+            ["null", "Is Empty"],
+            ["not-null", "Is Not Empty"]
+          ];
+        }
+
+        return [
+          ["eq", "Equals"],
+          ["ne", "Not Equals"],
+          ["null", "Is Empty"],
+          ["not-null", "Is Not Empty"]
+        ];
+      };
+
+      const renderEntities = () => {
+        const q = entitySearch.value.trim().toLowerCase();
+        entitySelect.innerHTML = "";
+
+        state.entities
+          .filter((e) => {
+            const text = `${e.label} ${e.logicalName} ${e.schemaName}`.toLowerCase();
+            return !q || text.includes(q);
+          })
+          .sort((a, b) =>
+            (a.label || a.logicalName).localeCompare(b.label || b.logicalName)
+          )
+          .forEach((e) => {
+            const opt = document.createElement("option");
+            opt.value = e.logicalName;
+            opt.textContent = `${e.label || e.logicalName} (${e.logicalName})`;
+            entitySelect.appendChild(opt);
+          });
+      };
+
+      const renderFields = () => {
+        const q = fieldSearch.value.trim().toLowerCase();
+        columnsSelect.innerHTML = "";
+
+        const filtered = state.fields
+          .filter((f) => {
+            const text = `${f.label} ${f.logicalName} ${f.schemaName}`.toLowerCase();
+            return !q || text.includes(q);
+          })
+          .sort((a, b) =>
+            (a.label || a.logicalName).localeCompare(b.label || b.logicalName)
+          );
+
+        filtered.forEach((f) => {
+          const row = document.createElement("label");
+          row.style.cssText = `
+            display:flex;
+            align-items:center;
+            gap:8px;
+            cursor:pointer;
+            padding:6px;
+            border-radius:8px;
+            font-size:13px;
+          `;
+
+          row.onmouseenter = () => (row.style.background = "#f8fafc");
+          row.onmouseleave = () => (row.style.background = "");
+
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = state.selectedColumns.includes(f.logicalName);
+
+          cb.onchange = () => {
+            if (cb.checked) {
+              if (!state.selectedColumns.includes(f.logicalName)) {
+                state.selectedColumns.push(f.logicalName);
+              }
+            } else {
+              state.selectedColumns = state.selectedColumns.filter(
+                (x) => x !== f.logicalName
+              );
+            }
+
+            selectedColumnsLabel.textContent = `Selected: ${state.selectedColumns.length}`;
+          };
+
+          const text = document.createElement("span");
+          text.textContent = `${f.label || f.logicalName} (${f.logicalName})`;
+
+          row.appendChild(cb);
+          row.appendChild(text);
+          columnsSelect.appendChild(row);
+        });
+
+        selectedColumnsLabel.textContent = `Selected: ${state.selectedColumns.length}`;
+      };
+
+      const getField = (logicalName) =>
+        state.fields.find((f) => f.logicalName === logicalName);
+
+      const renderConditions = () => {
+        conditionsWrap.innerHTML = "";
+
+        state.conditions.forEach((condition, index) => {
+          const row = document.createElement("div");
+          row.style.cssText = `
+            display:grid;
+            grid-template-columns: 1.3fr .8fr 1.2fr auto;
+            gap:8px;
+            align-items:center;
+          `;
+
+          const fieldSelect = document.createElement("select");
+          fieldSelect.style.cssText =
+            "border:1px solid #cbd5e1;border-radius:10px;padding:8px;";
+
+          state.fields
+            .sort((a, b) =>
+              (a.label || a.logicalName).localeCompare(b.label || b.logicalName)
+            )
+            .forEach((f) => {
+              const opt = document.createElement("option");
+              opt.value = f.logicalName;
+              opt.textContent = `${f.label || f.logicalName} (${f.logicalName})`;
+              if (condition.field === f.logicalName) opt.selected = true;
+              fieldSelect.appendChild(opt);
+            });
+
+          const operatorSelect = document.createElement("select");
+          operatorSelect.style.cssText =
+            "border:1px solid #cbd5e1;border-radius:10px;padding:8px;";
+
+          const selectedField = getField(condition.field);
+          const operators = getOperatorsByType(selectedField?.type);
+
+          operators.forEach(([value, label]) => {
+            const opt = document.createElement("option");
+            opt.value = value;
+            opt.textContent = label;
+            if (condition.operator === value) opt.selected = true;
+            operatorSelect.appendChild(opt);
+          });
+
+          const valueWrap = document.createElement("div");
+
+          const renderValueInput = () => {
+            valueWrap.innerHTML = "";
+
+            const field = getField(condition.field);
+            const operator = condition.operator;
+
+            if (operator === "null" || operator === "not-null" || operator === "eq-userid") {
+              const span = document.createElement("span");
+              span.textContent = "No value needed";
+              span.style.cssText = "color:#64748b;font-size:13px;";
+              valueWrap.appendChild(span);
+              return;
+            }
+
+            if (field?.options?.length) {
+              const select = document.createElement("select");
+              select.style.cssText =
+                "width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:8px;";
+
+              field.options.forEach((o) => {
+                const opt = document.createElement("option");
+                opt.value = o.value;
+                opt.textContent = `${o.label} (${o.value})`;
+                if (String(condition.value) === String(o.value)) opt.selected = true;
+                select.appendChild(opt);
+              });
+
+              select.onchange = () => {
+                condition.value = select.value;
+              };
+
+              valueWrap.appendChild(select);
+
+              if (!condition.value && field.options[0]) {
+                condition.value = field.options[0].value;
+              }
+
+              return;
+            }
+
+            const input = document.createElement("input");
+            input.value = condition.value || "";
+            input.placeholder = "Value";
+            input.style.cssText =
+              "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:10px;padding:8px;";
+
+            if (String(field?.type || "").toLowerCase().includes("datetime")) {
+              input.type = "date";
+            }
+
+            input.oninput = () => {
+              condition.value = input.value;
+            };
+
+            valueWrap.appendChild(input);
+          };
+
+          const removeBtn = document.createElement("button");
+          removeBtn.textContent = "Remove";
+          removeBtn.style.cssText = `
+            border:1px solid #fecaca;
+            background:#fff;
+            color:#b91c1c;
+            border-radius:10px;
+            padding:8px 10px;
+            font-weight:700;
+            cursor:pointer;
+          `;
+
+          fieldSelect.onchange = () => {
+            condition.field = fieldSelect.value;
+            condition.operator = "eq";
+            condition.value = "";
+            renderConditions();
+          };
+
+          operatorSelect.onchange = () => {
+            condition.operator = operatorSelect.value;
+            condition.value = "";
+            renderConditions();
+          };
+
+          removeBtn.onclick = () => {
+            state.conditions.splice(index, 1);
+            renderConditions();
+          };
+
+          row.appendChild(fieldSelect);
+          row.appendChild(operatorSelect);
+          row.appendChild(valueWrap);
+          row.appendChild(removeBtn);
+
+          conditionsWrap.appendChild(row);
+          renderValueInput();
+        });
+      };
+
+      const loadEntities = async () => {
+        entitySelect.innerHTML = "<option>Loading entities...</option>";
+
+        const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+
+        const rows = await fetchAll(
+          `${clientUrl}/api/data/v9.2/EntityDefinitions?$select=LogicalName,SchemaName,DisplayName,ObjectTypeCode&$filter=IsPrivate eq false`
+        );
+
+        state.entities = rows.map((e) => ({
+          logicalName: e.LogicalName,
+          schemaName: e.SchemaName,
+          label: getLabel(e.DisplayName, e.LogicalName)
+        }));
+
+        renderEntities();
+      };
+
+      const loadOptionsForField = async (entityLogicalName, field) => {
+        const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+
+        const type = String(field.type || "").toLowerCase();
+
+        let cast = null;
+
+        if (type.includes("picklist")) {
+          cast = "Microsoft.Dynamics.CRM.PicklistAttributeMetadata";
+        } else if (type.includes("status")) {
+          cast = "Microsoft.Dynamics.CRM.StatusAttributeMetadata";
+        } else if (type.includes("state")) {
+          cast = "Microsoft.Dynamics.CRM.StateAttributeMetadata";
+        } else if (type.includes("boolean")) {
+          cast = "Microsoft.Dynamics.CRM.BooleanAttributeMetadata";
+        }
+
+        if (!cast) return;
+
+        try {
+          const url =
+            `${clientUrl}/api/data/v9.2/EntityDefinitions(LogicalName='${entityLogicalName}')` +
+            `/Attributes(LogicalName='${field.logicalName}')/${cast}?$expand=OptionSet`;
+
+          const res = await fetch(url, {
+            headers: {
+              Accept: "application/json",
+              "OData-MaxVersion": "4.0",
+              "OData-Version": "4.0"
+            }
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) return;
+
+          if (type.includes("boolean")) {
+            const trueOption = data.OptionSet?.TrueOption;
+            const falseOption = data.OptionSet?.FalseOption;
+
+            field.options = [
+              {
+                value: falseOption?.Value ?? 0,
+                label: getLabel(falseOption?.Label, "No")
+              },
+              {
+                value: trueOption?.Value ?? 1,
+                label: getLabel(trueOption?.Label, "Yes")
+              }
+            ];
+          } else {
+            field.options = (data.OptionSet?.Options || []).map((o) => ({
+              value: o.Value,
+              label: getLabel(o.Label, String(o.Value))
+            }));
+          }
+        } catch {
+          field.options = [];
+        }
+      };
+
+      const loadFields = async (entityLogicalName) => {
+        columnsSelect.innerHTML = "Loading fields...";
+        conditionsWrap.innerHTML = "";
+        output.value = "";
+
+        state.entity = entityLogicalName;
+        state.fields = [];
+        state.selectedColumns = [];
+        state.conditions = [];
+
+        selectedColumnsLabel.textContent = "Selected: 0";
+
+        const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+
+        const url =
+          `${clientUrl}/api/data/v9.2/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes` +
+          `?$select=LogicalName,SchemaName,DisplayName,AttributeType`;
+
+        const attrs = await fetchAll(url);
+
+        state.fields = attrs
+          .filter(
+            (a) =>
+              a.LogicalName &&
+              !a.LogicalName.startsWith("_") &&
+              !a.LogicalName.includes("@")
+          )
+          .map((a) => ({
+            logicalName: a.LogicalName,
+            schemaName: a.SchemaName,
+            label: getLabel(a.DisplayName, a.LogicalName),
+            type: a.AttributeType,
+            options: []
+          }));
+
+        const optionFields = state.fields.filter((f) => {
+          const t = String(f.type || "").toLowerCase();
+          return (
+            t.includes("picklist") ||
+            t.includes("status") ||
+            t.includes("state") ||
+            t.includes("boolean")
+          );
+        });
+
+        await Promise.all(
+          optionFields.map((field) => loadOptionsForField(entityLogicalName, field))
+        );
+
+        renderFields();
+      };
+
+      const buildFetchXml = () => {
+        if (!state.entity) {
+          output.value = "Please select entity.";
+          return;
+        }
+
+        const columns =
+          state.selectedColumns.length > 0
+            ? state.selectedColumns
+            : [state.fields[0]?.logicalName].filter(Boolean);
+
+        const attrsXml = columns
+          .map((name) => `    <attribute name="${escapeXml(name)}" />`)
+          .join("\n");
+
+        const conditionsXml = state.conditions
+          .filter((c) => c.field && c.operator)
+          .map((c) => {
+            if (["null", "not-null", "eq-userid"].includes(c.operator)) {
+              return `      <condition attribute="${escapeXml(c.field)}" operator="${escapeXml(c.operator)}" />`;
+            }
+
+            const value =
+              c.operator === "like" || c.operator === "not-like"
+                ? `%${c.value || ""}%`
+                : c.value || "";
+
+            return `      <condition attribute="${escapeXml(c.field)}" operator="${escapeXml(c.operator)}" value="${escapeXml(value)}" />`;
+          })
+          .join("\n");
+
+        const filterXml = conditionsXml
+          ? `    <filter type="${escapeXml(state.filterType)}">
+${conditionsXml}
+    </filter>`
+          : "";
+
+        output.value = `<fetch top="50">
+  <entity name="${escapeXml(state.entity)}">
+${attrsXml}
+${filterXml}
+  </entity>
+</fetch>`;
+      };
+
+      entitySearch.oninput = renderEntities;
+      fieldSearch.oninput = renderFields;
+
+      entitySelect.onchange = async () => {
+        try {
+          await loadFields(entitySelect.value);
+        } catch (e) {
+          output.value = `Failed loading fields:\n${e.message || e}`;
+        }
+      };
+
+      $("#fbFilterType").onchange = (e) => {
+        state.filterType = e.target.value;
+      };
+
+      $("#fbAddCondition").onclick = () => {
+        if (!state.entity || !state.fields.length) {
+          alert("Select entity first.");
+          return;
+        }
+
+        state.conditions.push({
+          field: state.fields[0].logicalName,
+          operator: "eq",
+          value: ""
+        });
+
+        renderConditions();
+      };
+
+      $("#fbGenerate").onclick = buildFetchXml;
+
+      $("#fbCopy").onclick = async () => {
+        await navigator.clipboard.writeText(output.value);
+      };
+
+      try {
+        await loadEntities();
+      } catch (e) {
+        output.value = `Failed loading metadata:\n${e.message || e}`;
+      }
+    }
+  });
+});
