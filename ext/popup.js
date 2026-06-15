@@ -5256,12 +5256,45 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
       }
 
       async function getUserRoles(userId) {
-        const url =
+        const userUrl =
           `${BASE_URL}/systemusers(${userId})` +
           `?$select=fullname,domainname,isdisabled` +
-          `&$expand=systemuserroles_association($select=roleid,name,_businessunitid_value)`;
+          `&$expand=systemuserroles_association($select=roleid,name,_businessunitid_value),` +
+          `teammembership_association($select=teamid,name)`;
 
-        const userData = await fetchJSON(url);
+        const userData = await fetchJSON(userUrl);
+
+        const directRoles = (userData.systemuserroles_association || []).map(r => ({
+          roleid: r.roleid,
+          name: r.name || "",
+          businessunitid: r._businessunitid_value || "",
+          source: "ישיר"
+        }));
+
+        const teams = userData.teammembership_association || [];
+        const teamRolesArrays = await Promise.all(teams.map(async team => {
+          try {
+            const teamData = await fetchJSON(
+              `${BASE_URL}/teams(${team.teamid})?$select=name` +
+              `&$expand=teamroles_association($select=roleid,name,_businessunitid_value)`
+            );
+            return (teamData.teamroles_association || []).map(r => ({
+              roleid: r.roleid,
+              name: r.name || "",
+              businessunitid: r._businessunitid_value || "",
+              source: `צוות: ${team.name || ""}`
+            }));
+          } catch {
+            return [];
+          }
+        }));
+
+        const roleMap = new Map();
+        for (const r of [...directRoles, ...teamRolesArrays.flat()]) {
+          if (!roleMap.has(r.roleid)) {
+            roleMap.set(r.roleid, r);
+          }
+        }
 
         return {
           user: {
@@ -5269,11 +5302,7 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
             domainname: userData.domainname || "",
             isdisabled: !!userData.isdisabled
           },
-          roles: (userData.systemuserroles_association || []).map(r => ({
-            roleid: r.roleid,
-            name: r.name || "",
-            businessunitid: r._businessunitid_value || ""
-          }))
+          roles: Array.from(roleMap.values())
         };
       }
 
@@ -5326,42 +5355,54 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
           `;
 
           const roleNameCell = document.createElement("div");
-          roleNameCell.textContent = role.name || "";
+          const sourceLabel = role.source && role.source !== "ישיר"
+            ? ` <span style="font-size:12px;color:#666;">(${role.source})</span>`
+            : "";
+          roleNameCell.innerHTML = `${role.name || ""}${sourceLabel}`;
 
           const buCell = document.createElement("div");
           buCell.textContent = businessUnitsMap[role.businessunitid] || role.businessunitid || "";
 
           const actionCell = document.createElement("div");
-          const removeBtn = document.createElement("button");
-          removeBtn.textContent = "הסר";
-          removeBtn.style.cssText = `
-            border:none;
-            background:#d13438;
-            color:white;
-            border-radius:8px;
-            padding:8px 12px;
-            cursor:pointer;
-            font-size:14px;
-          `;
 
-          removeBtn.addEventListener("click", async () => {
-            if (!confirm(`להסיר את התפקיד "${role.name}" מהמשתמש?`)) return;
+          if (role.source === "ישיר") {
+            const removeBtn = document.createElement("button");
+            removeBtn.textContent = "הסר";
+            removeBtn.style.cssText = `
+              border:none;
+              background:#d13438;
+              color:white;
+              border-radius:8px;
+              padding:8px 12px;
+              cursor:pointer;
+              font-size:14px;
+            `;
 
-            removeBtn.disabled = true;
-            statusBox.textContent = `מסיר את התפקיד "${role.name}"...`;
+            removeBtn.addEventListener("click", async () => {
+              if (!confirm(`להסיר את התפקיד "${role.name}" מהמשתמש?`)) return;
 
-            try {
-              await removeUserRole(userId, role.roleid);
-              statusBox.textContent = `✅ התפקיד "${role.name}" הוסר בהצלחה`;
-              await refreshUserRoles(userId, selectedUserBox.textContent);
-            } catch (err) {
-              statusBox.textContent = `❌ שגיאה בהסרה: ${err.message}`;
-            } finally {
-              removeBtn.disabled = false;
-            }
-          });
+              removeBtn.disabled = true;
+              statusBox.textContent = `מסיר את התפקיד "${role.name}"...`;
 
-          actionCell.appendChild(removeBtn);
+              try {
+                await removeUserRole(userId, role.roleid);
+                statusBox.textContent = `✅ התפקיד "${role.name}" הוסר בהצלחה`;
+                await refreshUserRoles(userId, selectedUserBox.textContent);
+              } catch (err) {
+                statusBox.textContent = `❌ שגיאה בהסרה: ${err.message}`;
+              } finally {
+                removeBtn.disabled = false;
+              }
+            });
+
+            actionCell.appendChild(removeBtn);
+          } else {
+            const span = document.createElement("span");
+            span.style.cssText = "font-size:12px;color:#888;";
+            span.textContent = "דרך צוות";
+            actionCell.appendChild(span);
+          }
+
           row.appendChild(roleNameCell);
           row.appendChild(buCell);
           row.appendChild(actionCell);
@@ -5457,7 +5498,6 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
     }
   });
 });
-
 
 document.getElementById("quickUpdateFieldUi").addEventListener("click", async () => {
   const tab = await __d365GetActiveTab();
