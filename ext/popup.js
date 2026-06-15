@@ -4930,6 +4930,7 @@ const res = await fetch(absoluteUrl, {
     }
   });
 });
+
 document.getElementById("securityRolesUi").addEventListener("click", async () => {
   const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
@@ -4992,6 +4993,12 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
             <input id="__rolesRoleSearch" type="text" placeholder="חפש תפקיד"
               style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
 
+            <label style="display:block;font-weight:600;margin-bottom:8px;">סינון לפי יחידה עסקית</label>
+            <select id="__rolesBuFilter"
+              style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;">
+              <option value="">הכל</option>
+            </select>
+
             <select id="__rolesRoleSelect" size="8"
               style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
 
@@ -5032,6 +5039,7 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
       const userSelect = document.getElementById("__rolesUserSelect");
       const roleSearchInput = document.getElementById("__rolesRoleSearch");
       const roleSelect = document.getElementById("__rolesRoleSelect");
+      const buFilterSelect = document.getElementById("__rolesBuFilter");
       const showBtn = document.getElementById("__rolesShow");
       const addBtn = document.getElementById("__rolesAdd");
       const clearBtn = document.getElementById("__rolesClear");
@@ -5101,7 +5109,7 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
 
         allUsers = users.map(u => {
           const domain = u.domainname || "";
-          const username = domain ? domain.replace(/@mac\\.org\\.il$/i, "") : "";
+          const username = domain ? domain.replace(/@mac\.org\.il$/i, "") : "";
 
           return {
             id: u.systemuserid,
@@ -5128,25 +5136,24 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
       }
 
       async function loadRoles() {
-        const businessUnits = await loadBusinessUnitsMap();
-        const rootBusinessUnit = businessUnits.find(bu => !bu._parentbusinessunitid_value);
-
-        if (!rootBusinessUnit) {
-          throw new Error("לא נמצאה יחידה עסקית ראשית");
-        }
+        await loadBusinessUnitsMap();
 
         const roles = await fetchAllPages(
           `${BASE_URL}/roles?$select=roleid,name,_businessunitid_value&$orderby=name asc`
         );
 
         allRoles = roles
-          .filter(r => r.name && r._businessunitid_value === rootBusinessUnit.businessunitid)
-          .sort((a, b) => (a.name || "").localeCompare(b.name || "", "he"))
+          .filter(r => r.name)
           .map(r => ({
             id: r.roleid,
             name: r.name || "",
             businessunitid: r._businessunitid_value || ""
-          }));
+          }))
+          .sort((a, b) => {
+            const nameCmp = (a.name || "").localeCompare(b.name || "", "he");
+            if (nameCmp !== 0) return nameCmp;
+            return (businessUnitsMap[a.businessunitid] || "").localeCompare(businessUnitsMap[b.businessunitid] || "", "he");
+          });
       }
 
       function getCurrentUserId() {
@@ -5211,24 +5218,41 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
         if (filtered.length > 0) userSelect.selectedIndex = 0;
       }
 
-      function renderRoles(searchText = "") {
+      function renderRoles(searchText = "", buFilter = "") {
         const q = searchText.trim().toLowerCase();
         roleSelect.innerHTML = "";
 
         const filtered = allRoles.filter(r => {
+          if (buFilter && r.businessunitid !== buFilter) return false;
           if (!q) return true;
           return (r.name || "").toLowerCase().includes(q);
         });
 
         for (const role of filtered) {
+          const buName = businessUnitsMap[role.businessunitid] || "";
           const option = document.createElement("option");
           option.value = role.name;
-          option.textContent = role.name;
+          option.textContent = buName ? `${role.name} | ${buName}` : role.name;
           option.dataset.roleid = role.id;
           roleSelect.appendChild(option);
         }
 
         if (filtered.length > 0) roleSelect.selectedIndex = 0;
+      }
+
+      function populateBuFilter() {
+        const buIds = [...new Set(allRoles.map(r => r.businessunitid))];
+        const buList = buIds
+          .map(id => ({ id, name: businessUnitsMap[id] || "" }))
+          .filter(bu => bu.name)
+          .sort((a, b) => a.name.localeCompare(b.name, "he"));
+
+        for (const bu of buList) {
+          const opt = document.createElement("option");
+          opt.value = bu.id;
+          opt.textContent = bu.name;
+          buFilterSelect.appendChild(opt);
+        }
       }
 
       async function getUserRoles(userId) {
@@ -5364,6 +5388,7 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
         await Promise.all([loadUsers(), loadRoles()]);
         renderUsers();
         renderRoles();
+        populateBuFilter();
         statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים ו-${allRoles.length} תפקידים`;
       } catch (err) {
         statusBox.textContent = `❌ שגיאה בטעינה: ${err.message}`;
@@ -5374,11 +5399,13 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
       toggleUserSelectionState();
 
       userSearchInput.addEventListener("input", () => renderUsers(userSearchInput.value));
-      roleSearchInput.addEventListener("input", () => renderRoles(roleSearchInput.value));
+      roleSearchInput.addEventListener("input", () => renderRoles(roleSearchInput.value, buFilterSelect.value));
+      buFilterSelect.addEventListener("change", () => renderRoles(roleSearchInput.value, buFilterSelect.value));
 
       clearBtn.addEventListener("click", () => {
         userSearchInput.value = "";
         roleSearchInput.value = "";
+        buFilterSelect.value = "";
         renderUsers();
         renderRoles();
         currentSelectedUserId = null;
