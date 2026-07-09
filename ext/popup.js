@@ -5082,14 +5082,24 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
               <option value="">הכל</option>
             </select>
 
-            <select id="__rolesRoleSelect" size="8"
+            <select id="__rolesRoleSelect" size="6"
               style="width:100%;padding:8px;border:1px solid #ccc;border-radius:10px;box-sizing:border-box;"></select>
 
-            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
-              <button id="__rolesShow" style="border:none;background:#0f6cbd;color:white;border-radius:10px;padding:10px 16px;cursor:pointer;font-size:14px;">הצג תפקידים</button>
-              <button id="__rolesAdd" style="border:none;background:#107c10;color:white;border-radius:10px;padding:10px 16px;cursor:pointer;font-size:14px;">הוסף תפקיד</button>
-              <button id="__rolesClear" style="border:none;background:#eaeaea;color:#222;border-radius:10px;padding:10px 16px;cursor:pointer;font-size:14px;">נקה</button>
-            </div>
+         <div id="__rolesActions" style="
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:10px;
+  margin-top:14px;
+  position:sticky;
+  bottom:0;
+  background:#fff;
+  padding-top:10px;
+  z-index:2;
+">
+  <button id="__rolesShow" style="border:none;background:#0f6cbd;color:white;border-radius:10px;padding:10px 16px;cursor:pointer;font-size:14px;">הצג תפקידים</button>
+  <button id="__rolesAdd" style="border:none;background:#107c10;color:white;border-radius:10px;padding:10px 16px;cursor:pointer;font-size:14px;">הוסף תפקיד</button>
+  <button id="__rolesClear" style="border:none;background:#eaeaea;color:#222;border-radius:10px;padding:10px 16px;cursor:pointer;font-size:14px;">נקה</button>
+</div>
           </div>
 
           <div>
