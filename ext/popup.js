@@ -4941,6 +4941,89 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
     func: async () => {
       document.getElementById("__d365helper_modal")?.remove();
 
+      const CACHE_TTL_MS = 10 * 60 * 1000;
+      const USER_SEARCH_MIN_LENGTH = 2;
+      const USER_SEARCH_TOP = 50;
+      const ROLE_SEARCH_TOP = 300;
+
+      const collator = new Intl.Collator("he");
+
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+      const BASE_URL = `${clientUrl}/api/data/v9.2`;
+
+      let allRoles = [];
+      let businessUnitsMap = {};
+      let currentSelectedUserId = null;
+      let currentUserRoles = [];
+      let userSearchAbortController = null;
+
+      function normalizeGuid(id) {
+        return String(id || "").replace(/[{}]/g, "").trim();
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      function escapeODataString(str) {
+        return String(str ?? "").replace(/'/g, "''");
+      }
+
+      function debounce(fn, delay = 300) {
+        let timer = null;
+        return (...args) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => fn(...args), delay);
+        };
+      }
+
+      async function fetchJSON(url, options = {}) {
+        const res = await fetch(url, {
+          ...options,
+          headers: {
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            Accept: "application/json",
+            ...(options.headers || {})
+          },
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) {
+          let message = `${res.status}`;
+          try {
+            const err = await res.json();
+            message = err?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        if (res.status === 204) return null;
+        return await res.json();
+      }
+
+      async function fetchAllPages(url) {
+        const all = [];
+        let nextUrl = url;
+
+        while (nextUrl) {
+          const data = await fetchJSON(nextUrl);
+          all.push(...(data?.value || []));
+          nextUrl = data?.["@odata.nextLink"] || null;
+        }
+
+        return all;
+      }
+
+      function getCurrentUserId() {
+        return normalizeGuid(Xrm.Utility.getGlobalContext().userSettings.userId);
+      }
+
       const overlay = document.createElement("div");
       overlay.id = "__d365helper_modal";
       overlay.style.cssText = `
@@ -4983,7 +5066,7 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
         <div style="display:grid;grid-template-columns:380px 1fr;gap:20px;align-items:start;">
           <div>
             <label style="display:block;font-weight:600;margin-bottom:8px;">חיפוש משתמש</label>
-            <input id="__rolesUserSearch" type="text" placeholder="חפש לפי שם / יוזר / מייל"
+            <input id="__rolesUserSearch" type="text" placeholder="הקלד לפחות 2 תווים"
               style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:10px;margin-bottom:10px;box-sizing:border-box;" />
 
             <select id="__rolesUserSelect" size="15"
@@ -5020,7 +5103,6 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
                 <div>יחידה עסקית</div>
                 <div>פעולה</div>
               </div>
-
               <div id="__rolesRows" style="max-height:560px;overflow:auto;"></div>
             </div>
           </div>
@@ -5031,9 +5113,6 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
 
       overlay.appendChild(modal);
       document.body.appendChild(overlay);
-
-      const closeModal = () => overlay.remove();
-      document.getElementById("__rolesClose").onclick = closeModal;
 
       const userSearchInput = document.getElementById("__rolesUserSearch");
       const userSelect = document.getElementById("__rolesUserSelect");
@@ -5048,134 +5127,36 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
       const rowsBox = document.getElementById("__rolesRows");
       const useCurrentUserCheckbox = document.getElementById("__rolesUseCurrentUser");
 
-      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
-      const BASE_URL = `${clientUrl}/api/data/v9.2`;
+      document.getElementById("__rolesClose").onclick = () => overlay.remove();
 
-      let allUsers = [];
-      let allRoles = [];
-      let businessUnitsMap = {};
-      let currentSelectedUserId = null;
-
-      function normalizeGuid(id) {
-        return String(id || "").replace(/[{}]/g, "").trim();
+      function setStatus(text) {
+        statusBox.textContent = text || "";
       }
 
-      function escapeODataString(str) {
-        return String(str ?? "").replace(/'/g, "''");
-      }
-
-      async function fetchJSON(url, options = {}) {
-        const res = await fetch(url, {
-          ...options,
-          headers: {
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0",
-            "Accept": "application/json",
-            ...(options.headers || {})
-          },
-          credentials: "same-origin"
-        });
-
-        if (!res.ok) {
-          let message = `${res.status}`;
-          try {
-            const err = await res.json();
-            message = err?.error?.message || message;
-          } catch (_) {}
-          throw new Error(message);
-        }
-
-        if (res.status === 204) return null;
-        return await res.json();
-      }
-
-      async function fetchAllPages(url) {
-        let all = [];
-        let nextUrl = url;
-
-        while (nextUrl) {
-          const data = await fetchJSON(nextUrl);
-          all = all.concat(data?.value || []);
-          nextUrl = data?.["@odata.nextLink"] || null;
-        }
-
-        return all;
-      }
-
-      async function loadUsers() {
-        const users = await fetchAllPages(
-          `${BASE_URL}/systemusers?$select=systemuserid,fullname,domainname,isdisabled,internalemailaddress&$orderby=fullname asc`
-        );
-
-        allUsers = users.map(u => {
-          const domain = u.domainname || "";
-          const username = domain ? domain.replace(/@mac\.org\.il$/i, "") : "";
-
-          return {
-            id: u.systemuserid,
-            fullname: u.fullname || "",
-            domainname: domain,
-            internalemailaddress: u.internalemailaddress || "",
-            isdisabled: !!u.isdisabled,
-            username
-          };
-        });
-      }
-
-      async function loadBusinessUnitsMap() {
-        const businessUnits = await fetchAllPages(
-          `${BASE_URL}/businessunits?$select=businessunitid,name,_parentbusinessunitid_value&$orderby=name asc`
-        );
-
-        businessUnitsMap = {};
-        for (const bu of businessUnits) {
-          businessUnitsMap[bu.businessunitid] = bu.name || "";
-        }
-
-        return businessUnits;
-      }
-
-      async function loadRoles() {
-        await loadBusinessUnitsMap();
-
-        const roles = await fetchAllPages(
-          `${BASE_URL}/roles?$select=roleid,name,_businessunitid_value&$orderby=name asc`
-        );
-
-        allRoles = roles
-          .filter(r => r.name)
-          .map(r => ({
-            id: r.roleid,
-            name: r.name || "",
-            businessunitid: r._businessunitid_value || ""
-          }))
-          .sort((a, b) => {
-            const nameCmp = (a.name || "").localeCompare(b.name || "", "he");
-            if (nameCmp !== 0) return nameCmp;
-            return (businessUnitsMap[a.businessunitid] || "").localeCompare(businessUnitsMap[b.businessunitid] || "", "he");
-          });
-      }
-
-      function getCurrentUserId() {
-        return normalizeGuid(Xrm.Utility.getGlobalContext().userSettings.userId);
+      function clearUsers(message = "הקלד לפחות 2 תווים לחיפוש משתמש.") {
+        userSelect.innerHTML = "";
+        const option = document.createElement("option");
+        option.textContent = message;
+        option.disabled = true;
+        userSelect.appendChild(option);
       }
 
       function getSelectedUserId() {
         if (useCurrentUserCheckbox.checked) return getCurrentUserId();
 
         const selectedUser = userSelect.options[userSelect.selectedIndex];
-        if (!selectedUser) throw new Error("צריך לבחור משתמש מהרשימה או לסמן 'בצע עליי'.");
+        if (!selectedUser || selectedUser.disabled || !selectedUser.dataset.userid) {
+          throw new Error("צריך לבחור משתמש מהרשימה או לסמן 'בצע עליי'.");
+        }
 
         return selectedUser.dataset.userid;
       }
 
       function getSelectedUserLabel() {
-        if (useCurrentUserCheckbox.checked) {
-          return "משתמש נבחר: המשתמש המחובר";
-        }
+        if (useCurrentUserCheckbox.checked) return "משתמש נבחר: המשתמש המחובר";
 
         const selectedUser = userSelect.options[userSelect.selectedIndex];
-        if (!selectedUser) return "לא נבחר משתמש";
+        if (!selectedUser || selectedUser.disabled) return "לא נבחר משתמש";
 
         return `משתמש נבחר: ${selectedUser.dataset.fullname || ""} | ${selectedUser.dataset.domainname || "ללא domain"} | ${selectedUser.dataset.isdisabled === "true" ? "לא פעיל" : "פעיל"}`;
       }
@@ -5187,114 +5168,219 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
         userSelect.disabled = disabled;
         userSearchInput.style.opacity = disabled ? "0.6" : "1";
         userSelect.style.opacity = disabled ? "0.6" : "1";
+
+        if (disabled) {
+          selectedUserBox.textContent = "משתמש נבחר: המשתמש המחובר";
+        }
       }
 
-      function renderUsers(searchText = "") {
-        const q = searchText.trim().toLowerCase();
-        userSelect.innerHTML = "";
+      async function searchUsers(searchText) {
+        const q = searchText.trim();
 
-        const filtered = allUsers.filter(u => {
-          if (!q) return true;
-          return (
-            (u.fullname || "").toLowerCase().includes(q) ||
-            (u.domainname || "").toLowerCase().includes(q) ||
-            (u.username || "").toLowerCase().includes(q) ||
-            (u.internalemailaddress || "").toLowerCase().includes(q)
-          );
-        });
-
-        for (const user of filtered) {
-          const option = document.createElement("option");
-          option.value = user.id;
-          option.textContent = `${user.fullname || "(ללא שם)"} | ${user.username || user.domainname || "ללא domain"} | ${user.isdisabled ? "לא פעיל" : "פעיל"}`;
-          option.dataset.userid = user.id;
-          option.dataset.fullname = user.fullname || "";
-          option.dataset.domainname = user.domainname || "";
-          option.dataset.email = user.internalemailaddress || "";
-          option.dataset.isdisabled = String(user.isdisabled);
-          userSelect.appendChild(option);
+        if (q.length < USER_SEARCH_MIN_LENGTH) {
+          clearUsers();
+          return;
         }
 
-        if (filtered.length > 0) userSelect.selectedIndex = 0;
+        if (userSearchAbortController) {
+          userSearchAbortController.abort();
+        }
+
+        userSearchAbortController = new AbortController();
+
+      const safeQ = escapeODataString(q);
+
+const filterParts = [
+  `contains(fullname,'${safeQ}')`,
+  `contains(domainname,'${safeQ}')`,
+  `contains(internalemailaddress,'${safeQ}')`
+];
+
+        const url =
+          `${BASE_URL}/systemusers` +
+          `?$select=systemuserid,fullname,domainname,isdisabled,internalemailaddress` +
+          `&$filter=${encodeURIComponent(filterParts.join(" or "))}` +
+          `&$orderby=fullname asc` +
+          `&$top=${USER_SEARCH_TOP}`;
+
+        userSelect.innerHTML = "";
+        const loading = document.createElement("option");
+        loading.disabled = true;
+        loading.textContent = "מחפש משתמשים...";
+        userSelect.appendChild(loading);
+
+        try {
+          const data = await fetchJSON(url, { signal: userSearchAbortController.signal });
+          renderUsers(data?.value || []);
+        } catch (err) {
+          if (err.name === "AbortError") return;
+          clearUsers(`שגיאה בחיפוש משתמשים: ${err.message}`);
+        }
+      }
+
+      function renderUsers(users) {
+        userSelect.innerHTML = "";
+
+        if (!users.length) {
+          clearUsers("לא נמצאו משתמשים.");
+          return;
+        }
+
+        const fragment = document.createDocumentFragment();
+
+        for (const u of users) {
+          const domain = u.domainname || "";
+          const username = domain ? domain.replace(/@mac\.org\.il$/i, "") : "";
+
+          const option = document.createElement("option");
+          option.value = u.systemuserid;
+          option.textContent = `${u.fullname || "(ללא שם)"} | ${username || domain || "ללא domain"} | ${u.isdisabled ? "לא פעיל" : "פעיל"}`;
+          option.dataset.userid = u.systemuserid;
+          option.dataset.fullname = u.fullname || "";
+          option.dataset.domainname = domain;
+          option.dataset.email = u.internalemailaddress || "";
+          option.dataset.isdisabled = String(!!u.isdisabled);
+
+          fragment.appendChild(option);
+        }
+
+        userSelect.appendChild(fragment);
+        userSelect.selectedIndex = 0;
+      }
+
+      async function loadBusinessUnitsMapCached() {
+        const cache = window.__d365SecurityRolesBuCache;
+        const now = Date.now();
+
+        if (cache?.createdAt && now - cache.createdAt < CACHE_TTL_MS) {
+          businessUnitsMap = cache.businessUnitsMap || {};
+          return cache.businessUnits || [];
+        }
+
+        const businessUnits = await fetchAllPages(
+          `${BASE_URL}/businessunits?$select=businessunitid,name&$orderby=name asc`
+        );
+
+        businessUnitsMap = {};
+        for (const bu of businessUnits) {
+          businessUnitsMap[normalizeGuid(bu.businessunitid)] = bu.name || "";
+        }
+
+        window.__d365SecurityRolesBuCache = {
+          createdAt: now,
+          businessUnits,
+          businessUnitsMap
+        };
+
+        return businessUnits;
+      }
+
+      async function loadRolesCached() {
+        const cache = window.__d365SecurityRolesCache;
+        const now = Date.now();
+
+        if (cache?.createdAt && now - cache.createdAt < CACHE_TTL_MS) {
+          allRoles = cache.allRoles || [];
+          businessUnitsMap = cache.businessUnitsMap || {};
+          return;
+        }
+
+        await loadBusinessUnitsMapCached();
+
+        const roles = await fetchAllPages(
+          `${BASE_URL}/roles?$select=roleid,name,_businessunitid_value&$orderby=name asc`
+        );
+
+        allRoles = roles
+          .filter(r => r.name)
+          .map(r => {
+            const buId = normalizeGuid(r._businessunitid_value);
+            return {
+              id: normalizeGuid(r.roleid),
+              name: r.name || "",
+              businessunitid: buId,
+              buName: businessUnitsMap[buId] || ""
+            };
+          })
+          .sort((a, b) => {
+            const nameCmp = collator.compare(a.name || "", b.name || "");
+            if (nameCmp !== 0) return nameCmp;
+            return collator.compare(a.buName || "", b.buName || "");
+          });
+
+        window.__d365SecurityRolesCache = {
+          createdAt: now,
+          allRoles,
+          businessUnitsMap
+        };
+      }
+
+      function populateBuFilter() {
+        buFilterSelect.innerHTML = `<option value="">הכל</option>`;
+
+        const buList = [...new Map(
+          allRoles
+            .filter(r => r.businessunitid && r.buName)
+            .map(r => [r.businessunitid, { id: r.businessunitid, name: r.buName }])
+        ).values()].sort((a, b) => collator.compare(a.name, b.name));
+
+        const fragment = document.createDocumentFragment();
+
+        for (const bu of buList) {
+          const opt = document.createElement("option");
+          opt.value = bu.id;
+          opt.textContent = bu.name;
+          fragment.appendChild(opt);
+        }
+
+        buFilterSelect.appendChild(fragment);
       }
 
       function renderRoles(searchText = "", buFilter = "") {
         const q = searchText.trim().toLowerCase();
         roleSelect.innerHTML = "";
 
-        const filtered = allRoles.filter(r => {
-          if (buFilter && r.businessunitid !== buFilter) return false;
-          if (!q) return true;
-          return (r.name || "").toLowerCase().includes(q);
-        });
+        const filtered = [];
+        for (const role of allRoles) {
+          if (buFilter && role.businessunitid !== buFilter) continue;
+          if (q && !role.name.toLowerCase().includes(q)) continue;
+
+          filtered.push(role);
+          if (filtered.length >= ROLE_SEARCH_TOP) break;
+        }
+
+        if (!filtered.length) {
+          const option = document.createElement("option");
+          option.textContent = "לא נמצאו תפקידים.";
+          option.disabled = true;
+          roleSelect.appendChild(option);
+          return;
+        }
+
+        const fragment = document.createDocumentFragment();
 
         for (const role of filtered) {
-          const buName = businessUnitsMap[role.businessunitid] || "";
           const option = document.createElement("option");
           option.value = role.name;
-          option.textContent = buName ? `${role.name} | ${buName}` : role.name;
+          option.textContent = role.buName ? `${role.name} | ${role.buName}` : role.name;
           option.dataset.roleid = role.id;
-          roleSelect.appendChild(option);
+          option.dataset.rolename = role.name;
+          option.dataset.businessunitid = role.businessunitid;
+          option.dataset.buname = role.buName || "";
+          fragment.appendChild(option);
         }
 
-        if (filtered.length > 0) roleSelect.selectedIndex = 0;
+        roleSelect.appendChild(fragment);
+        roleSelect.selectedIndex = 0;
       }
 
-      function populateBuFilter() {
-        const buIds = [...new Set(allRoles.map(r => r.businessunitid))];
-        const buList = buIds
-          .map(id => ({ id, name: businessUnitsMap[id] || "" }))
-          .filter(bu => bu.name)
-          .sort((a, b) => a.name.localeCompare(b.name, "he"));
-
-        for (const bu of buList) {
-          const opt = document.createElement("option");
-          opt.value = bu.id;
-          opt.textContent = bu.name;
-          buFilterSelect.appendChild(opt);
-        }
-      }
-
-      async function getUserRoles(userId) {
-        const userUrl =
+      async function getDirectUserRoles(userId) {
+        const url =
           `${BASE_URL}/systemusers(${userId})` +
           `?$select=fullname,domainname,isdisabled` +
-          `&$expand=systemuserroles_association($select=roleid,name,_businessunitid_value),` +
-          `teammembership_association($select=teamid,name)`;
+          `&$expand=systemuserroles_association($select=roleid,name,_businessunitid_value)`;
 
-        const userData = await fetchJSON(userUrl);
-
-        const directRoles = (userData.systemuserroles_association || []).map(r => ({
-          roleid: r.roleid,
-          name: r.name || "",
-          businessunitid: r._businessunitid_value || "",
-          source: "ישיר"
-        }));
-
-        const teams = userData.teammembership_association || [];
-        const teamRolesArrays = await Promise.all(teams.map(async team => {
-          try {
-            const teamData = await fetchJSON(
-              `${BASE_URL}/teams(${team.teamid})?$select=name` +
-              `&$expand=teamroles_association($select=roleid,name,_businessunitid_value)`
-            );
-            return (teamData.teamroles_association || []).map(r => ({
-              roleid: r.roleid,
-              name: r.name || "",
-              businessunitid: r._businessunitid_value || "",
-              source: `צוות: ${team.name || ""}`
-            }));
-          } catch {
-            return [];
-          }
-        }));
-
-        const roleMap = new Map();
-        for (const r of [...directRoles, ...teamRolesArrays.flat()]) {
-          if (!roleMap.has(r.roleid)) {
-            roleMap.set(r.roleid, r);
-          }
-        }
+        const userData = await fetchJSON(url);
 
         return {
           user: {
@@ -5302,22 +5388,105 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
             domainname: userData.domainname || "",
             isdisabled: !!userData.isdisabled
           },
-          roles: Array.from(roleMap.values())
+          roles: (userData.systemuserroles_association || []).map(r => {
+            const buId = normalizeGuid(r._businessunitid_value);
+            return {
+              roleid: normalizeGuid(r.roleid),
+              name: r.name || "",
+              businessunitid: buId,
+              buName: businessUnitsMap[buId] || "",
+              source: "ישיר"
+            };
+          })
+        };
+      }
+
+      async function getTeamRolesViaFetchXml(userId) {
+        const fetchXml = `
+          <fetch distinct="true">
+            <entity name="role">
+              <attribute name="roleid" />
+              <attribute name="name" />
+              <attribute name="businessunitid" />
+              <link-entity name="teamroles" from="roleid" to="roleid" intersect="true">
+                <link-entity name="team" from="teamid" to="teamid" alias="team">
+                  <attribute name="name" />
+                  <link-entity name="teammembership" from="teamid" to="teamid" intersect="true">
+                    <link-entity name="systemuser" from="systemuserid" to="systemuserid">
+                      <filter>
+                        <condition attribute="systemuserid" operator="eq" value="${userId}" />
+                      </filter>
+                    </link-entity>
+                  </link-entity>
+                </link-entity>
+              </link-entity>
+            </entity>
+          </fetch>`.trim();
+
+        const result = await Xrm.WebApi.retrieveMultipleRecords(
+          "role",
+          `?fetchXml=${encodeURIComponent(fetchXml)}`
+        );
+
+        return (result.entities || []).map(r => {
+          const roleId = normalizeGuid(r.roleid);
+          const buId = normalizeGuid(
+            r._businessunitid_value ||
+            r.businessunitid ||
+            r["businessunitid"] ||
+            ""
+          );
+
+          const teamName =
+            r["team.name"] ||
+            r["team.name@OData.Community.Display.V1.FormattedValue"] ||
+            "";
+
+          return {
+            roleid: roleId,
+            name: r.name || "",
+            businessunitid: buId,
+            buName:
+              businessUnitsMap[buId] ||
+              r["_businessunitid_value@OData.Community.Display.V1.FormattedValue"] ||
+              "",
+            source: teamName ? `צוות: ${teamName}` : "צוות"
+          };
+        });
+      }
+
+      async function getUserRoles(userId) {
+        const [directResult, teamRoles] = await Promise.all([
+          getDirectUserRoles(userId),
+          getTeamRolesViaFetchXml(userId)
+        ]);
+
+        const roleMap = new Map();
+
+        for (const role of directResult.roles) {
+          roleMap.set(role.roleid, role);
+        }
+
+        for (const role of teamRoles) {
+          if (!roleMap.has(role.roleid)) {
+            roleMap.set(role.roleid, role);
+          }
+        }
+
+        return {
+          user: directResult.user,
+          roles: [...roleMap.values()]
         };
       }
 
       async function addUserRole(userId, roleId) {
-        const roleData = await fetchJSON(`${BASE_URL}/roles(${roleId})?$select=roleid,name`);
-
         await fetchJSON(`${BASE_URL}/systemusers(${userId})/systemuserroles_association/$ref`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            "@odata.id": `${BASE_URL}/roles(${roleData.roleid})`
+            "@odata.id": `${BASE_URL}/roles(${roleId})`
           })
         });
-
-        return roleData;
       }
 
       async function removeUserRole(userId, roleId) {
@@ -5339,10 +5508,12 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
         }
 
         const sortedRoles = [...roles].sort((a, b) => {
-          const nameCompare = (a.name || "").localeCompare(b.name || "", "he");
+          const nameCompare = collator.compare(a.name || "", b.name || "");
           if (nameCompare !== 0) return nameCompare;
-          return (businessUnitsMap[a.businessunitid] || "").localeCompare(businessUnitsMap[b.businessunitid] || "", "he");
+          return collator.compare(a.buName || "", b.buName || "");
         });
+
+        const fragment = document.createDocumentFragment();
 
         for (const role of sortedRoles) {
           const row = document.createElement("div");
@@ -5354,105 +5525,114 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
             align-items:center;
           `;
 
-          const roleNameCell = document.createElement("div");
-          const sourceLabel = role.source && role.source !== "ישיר"
-            ? ` <span style="font-size:12px;color:#666;">(${role.source})</span>`
-            : "";
-          roleNameCell.innerHTML = `${role.name || ""}${sourceLabel}`;
+          const sourceLabel =
+            role.source && role.source !== "ישיר"
+              ? ` <span style="font-size:12px;color:#666;">(${escapeHtml(role.source)})</span>`
+              : "";
 
-          const buCell = document.createElement("div");
-          buCell.textContent = businessUnitsMap[role.businessunitid] || role.businessunitid || "";
-
-          const actionCell = document.createElement("div");
-
-          if (role.source === "ישיר") {
-            const removeBtn = document.createElement("button");
-            removeBtn.textContent = "הסר";
-            removeBtn.style.cssText = `
-              border:none;
-              background:#d13438;
-              color:white;
-              border-radius:8px;
-              padding:8px 12px;
-              cursor:pointer;
-              font-size:14px;
-            `;
-
-            removeBtn.addEventListener("click", async () => {
-              if (!confirm(`להסיר את התפקיד "${role.name}" מהמשתמש?`)) return;
-
-              removeBtn.disabled = true;
-              statusBox.textContent = `מסיר את התפקיד "${role.name}"...`;
-
-              try {
-                await removeUserRole(userId, role.roleid);
-                statusBox.textContent = `✅ התפקיד "${role.name}" הוסר בהצלחה`;
-                await refreshUserRoles(userId, selectedUserBox.textContent);
-              } catch (err) {
-                statusBox.textContent = `❌ שגיאה בהסרה: ${err.message}`;
-              } finally {
-                removeBtn.disabled = false;
+          row.innerHTML = `
+            <div>${escapeHtml(role.name || "")}${sourceLabel}</div>
+            <div>${escapeHtml(role.buName || businessUnitsMap[role.businessunitid] || role.businessunitid || "")}</div>
+            <div>
+              ${
+                role.source === "ישיר"
+                  ? `<button 
+                      type="button"
+                      data-action="remove-role"
+                      data-roleid="${escapeHtml(role.roleid)}"
+                      data-rolename="${escapeHtml(role.name)}"
+                      style="border:none;background:#d13438;color:white;border-radius:8px;padding:8px 12px;cursor:pointer;font-size:14px;">
+                      הסר
+                    </button>`
+                  : `<span style="font-size:12px;color:#888;">דרך צוות</span>`
               }
-            });
+            </div>
+          `;
 
-            actionCell.appendChild(removeBtn);
-          } else {
-            const span = document.createElement("span");
-            span.style.cssText = "font-size:12px;color:#888;";
-            span.textContent = "דרך צוות";
-            actionCell.appendChild(span);
-          }
-
-          row.appendChild(roleNameCell);
-          row.appendChild(buCell);
-          row.appendChild(actionCell);
-          rowsBox.appendChild(row);
+          fragment.appendChild(row);
         }
+
+        rowsBox.appendChild(fragment);
       }
 
       async function refreshUserRoles(userId, userLabel) {
         currentSelectedUserId = userId;
+        currentUserRoles = [];
+
         rowsBox.innerHTML = "";
         selectedUserBox.textContent = userLabel || getSelectedUserLabel();
-        statusBox.textContent = "טוען תפקידי אבטחה...";
+        setStatus("טוען תפקידי אבטחה...");
 
         const result = await getUserRoles(userId);
-        renderRolesRows(result.roles, userId);
+        currentUserRoles = result.roles;
 
-        statusBox.textContent =
-          `✅ נמצאו ${result.roles.length} תפקידי אבטחה עבור ${result.user.fullname}` +
-          (result.user.domainname ? ` (${result.user.domainname})` : "");
+        renderRolesRows(currentUserRoles, userId);
+
+        setStatus(
+          `✅ נמצאו ${currentUserRoles.length} תפקידי אבטחה עבור ${result.user.fullname}` +
+          (result.user.domainname ? ` (${result.user.domainname})` : "")
+        );
       }
 
-      try {
-        statusBox.textContent = "טוען משתמשים, תפקידים ויחידות עסקיות...";
-        await Promise.all([loadUsers(), loadRoles()]);
-        renderUsers();
-        renderRoles();
-        populateBuFilter();
-        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים ו-${allRoles.length} תפקידים`;
-      } catch (err) {
-        statusBox.textContent = `❌ שגיאה בטעינה: ${err.message}`;
-        return;
-      }
+      rowsBox.addEventListener("click", async event => {
+        const btn = event.target.closest("[data-action='remove-role']");
+        if (!btn) return;
+
+        const roleId = btn.dataset.roleid;
+        const roleName = btn.dataset.rolename || "";
+
+        if (!currentSelectedUserId) {
+          setStatus("לא נבחר משתמש.");
+          return;
+        }
+
+        if (!confirm(`להסיר את התפקיד "${roleName}" מהמשתמש?`)) return;
+
+        btn.disabled = true;
+        setStatus(`מסיר את התפקיד "${roleName}"...`);
+
+        try {
+          await removeUserRole(currentSelectedUserId, roleId);
+
+          currentUserRoles = currentUserRoles.filter(r => r.roleid !== roleId);
+          renderRolesRows(currentUserRoles, currentSelectedUserId);
+
+          setStatus(`✅ התפקיד "${roleName}" הוסר בהצלחה`);
+        } catch (err) {
+          setStatus(`❌ שגיאה בהסרה: ${err.message}`);
+        } finally {
+          btn.disabled = false;
+        }
+      });
 
       useCurrentUserCheckbox.addEventListener("change", toggleUserSelectionState);
-      toggleUserSelectionState();
 
-      userSearchInput.addEventListener("input", () => renderUsers(userSearchInput.value));
-      roleSearchInput.addEventListener("input", () => renderRoles(roleSearchInput.value, buFilterSelect.value));
-      buFilterSelect.addEventListener("change", () => renderRoles(roleSearchInput.value, buFilterSelect.value));
+      userSearchInput.addEventListener(
+        "input",
+        debounce(() => searchUsers(userSearchInput.value), 300)
+      );
+
+      roleSearchInput.addEventListener(
+        "input",
+        debounce(() => renderRoles(roleSearchInput.value, buFilterSelect.value), 150)
+      );
+
+      buFilterSelect.addEventListener("change", () => {
+        renderRoles(roleSearchInput.value, buFilterSelect.value);
+      });
 
       clearBtn.addEventListener("click", () => {
         userSearchInput.value = "";
         roleSearchInput.value = "";
         buFilterSelect.value = "";
-        renderUsers();
-        renderRoles();
         currentSelectedUserId = null;
+        currentUserRoles = [];
+
+        clearUsers();
+        renderRoles();
         selectedUserBox.textContent = "לא נבחר משתמש";
         rowsBox.innerHTML = "";
-        statusBox.textContent = `✅ נטענו ${allUsers.length} משתמשים ו-${allRoles.length} תפקידים`;
+        setStatus(`✅ נטענו ${allRoles.length} תפקידים. משתמשים נטענים לפי חיפוש בלבד.`);
       });
 
       showBtn.addEventListener("click", async () => {
@@ -5462,7 +5642,7 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
           const userId = getSelectedUserId();
           await refreshUserRoles(userId, getSelectedUserLabel());
         } catch (err) {
-          statusBox.textContent = `❌ שגיאה: ${err.message}`;
+          setStatus(`❌ שגיאה: ${err.message}`);
         } finally {
           showBtn.disabled = false;
         }
@@ -5471,8 +5651,8 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
       addBtn.addEventListener("click", async () => {
         const selectedRole = roleSelect.options[roleSelect.selectedIndex];
 
-        if (!selectedRole) {
-          statusBox.textContent = "צריך לבחור תפקיד מהרשימה.";
+        if (!selectedRole || selectedRole.disabled) {
+          setStatus("צריך לבחור תפקיד מהרשימה.");
           return;
         }
 
@@ -5480,21 +5660,53 @@ document.getElementById("securityRolesUi").addEventListener("click", async () =>
 
         try {
           const userId = getSelectedUserId();
-          const roleId = selectedRole.dataset.roleid;
-          const roleName = selectedRole.value;
+          const roleId = normalizeGuid(selectedRole.dataset.roleid);
+          const roleName = selectedRole.dataset.rolename || selectedRole.value;
+          const buId = normalizeGuid(selectedRole.dataset.businessunitid);
+          const buName = selectedRole.dataset.buname || businessUnitsMap[buId] || "";
 
-          statusBox.textContent = `מקצה את התפקיד "${roleName}"...`;
+          setStatus(`מקצה את התפקיד "${roleName}"...`);
 
-          const role = await addUserRole(userId, roleId);
+          await addUserRole(userId, roleId);
 
-          statusBox.textContent = `✅ התפקיד "${role.name}" הוקצה בהצלחה`;
-          await refreshUserRoles(userId, getSelectedUserLabel());
+          const exists = currentUserRoles.some(r => r.roleid === roleId);
+
+          if (currentSelectedUserId === userId && !exists) {
+            currentUserRoles.push({
+              roleid: roleId,
+              name: roleName,
+              businessunitid: buId,
+              buName,
+              source: "ישיר"
+            });
+
+            renderRolesRows(currentUserRoles, userId);
+          } else if (currentSelectedUserId !== userId) {
+            await refreshUserRoles(userId, getSelectedUserLabel());
+          }
+
+          setStatus(`✅ התפקיד "${roleName}" הוקצה בהצלחה`);
         } catch (err) {
-          statusBox.textContent = `❌ שגיאה בהוספה: ${err.message}`;
+          setStatus(`❌ שגיאה בהוספה: ${err.message}`);
         } finally {
           addBtn.disabled = false;
         }
       });
+
+      try {
+        setStatus("טוען תפקידים ויחידות עסקיות...");
+        clearUsers();
+
+        await loadRolesCached();
+
+        renderRoles();
+        populateBuFilter();
+        toggleUserSelectionState();
+
+        setStatus(`✅ נטענו ${allRoles.length} תפקידים. חיפוש משתמשים מתבצע לפי הקלדה בלבד.`);
+      } catch (err) {
+        setStatus(`❌ שגיאה בטעינה: ${err.message}`);
+      }
     }
   });
 });
