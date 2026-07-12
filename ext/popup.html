@@ -3,185 +3,437 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
     <title>Roi Valdman Extensions</title>
+
     <link rel="stylesheet" href="popup.css" />
-    <script type="text/javascript" src="ClientGlobalContext.js.aspx"></script>
+
+    <script
+      type="text/javascript"
+      src="ClientGlobalContext.js.aspx"
+    ></script>
   </head>
 
   <body>
     <div class="app">
-      <header class="app-header">
-        <div class="brand">
-          <div class="brand-mark">RV</div>
-          <div class="brand-text">
-            <h1>Roi Valdman Extensions</h1>
-            <p>D365 / Dataverse Tools</p>
+  <header class="app-header">
+
+
+  <div class="brand-text">
+    <h1>Roi Valdman Extensions</h1>
+    <p>D365 / Dataverse Tools</p>
+  </div>
+</header>
+
+      <main class="dashboard">
+        <!-- Metadata -->
+        <section class="tool-category">
+          <div class="category-header">
+            <div class="category-icon">◫</div>
+
+            <div>
+              <h2>Metadata & UI</h2>
+              <p>Forms, fields and interface tools</p>
+            </div>
           </div>
-        </div>
-      </header>
 
-    
+          <div class="tools-grid">
+            <button
+              id="formBeautifier"
+              class="tool-card"
+              data-label="form beautifier logical names required dirty hidden disabled"
+            >
+              <span class="tool-icon">🎨</span>
 
-      <main class="nav-sections">
-        <section class="nav-group" data-group="metadata">
-          <div class="nav-group-title">Metadata & UI</div>
-          <button id="formBeautifier" class="nav-item" data-label="form beautifier logical names required dirty hidden disabled">
-            <span class="nav-icon">🎨</span>
-            <span class="nav-text">Form Beautifier</span>
-          </button>
-          <button id="findLogicalByLabel" class="nav-item" data-label="get logical name logical display metadata">
-            <span class="nav-icon">#</span>
-            <span class="nav-text">Get Logical Name</span>
-          </button>
+              <span class="tool-content">
+                <strong>Form Beautifier</strong>
+                <small>Display field states and logical names</small>
+              </span>
+            </button>
 
-          <button id="findLabelByLogical" class="nav-item" data-label="get display name display logical metadata">
-            <span class="nav-icon">Aa</span>
-            <span class="nav-text">Get Display Name</span>
-          </button>
+            <button
+              id="findLogicalByLabel"
+              class="tool-card"
+              data-label="get logical name logical display metadata"
+            >
+              <span class="tool-icon">#</span>
 
-          <button id="tabsname" class="nav-item" data-label="get tabs names tabs form ui">
-            <span class="nav-icon">☷</span>
-            <span class="nav-text">Get Tabs Names</span>
-          </button>
+              <span class="tool-content">
+                <strong>Get Logical Name</strong>
+                <small>Find logical name by display label</small>
+              </span>
+            </button>
 
-          <button id="getFieldValue" class="nav-item" data-label="get field current record value">
-            <span class="nav-icon">◫</span>
-            <span class="nav-text">Get Field - current record</span>
-          </button>
+            <button
+              id="findLabelByLogical"
+              class="tool-card"
+              data-label="get display name display logical metadata"
+            >
+              <span class="tool-icon">Aa</span>
 
-          <button id="showDirtyFields" class="nav-item" data-label="show dirty fields modified changed">
-            <span class="nav-icon">✎</span>
-            <span class="nav-text">Show Dirty Fields</span>
-          </button>
+              <span class="tool-content">
+                <strong>Get Display Name</strong>
+                <small>Find display name by logical name</small>
+              </span>
+            </button>
 
-          <button id="openDefaultView" class="nav-item" data-label="open entity view default entity view">
-            <span class="nav-icon">☰</span>
-            <span class="nav-text">Open Entity View</span>
-          </button>
+            <button
+              id="tabsname"
+              class="tool-card"
+              data-label="get tabs names tabs form ui"
+            >
+              <span class="tool-icon">☷</span>
+
+              <span class="tool-content">
+                <strong>Get Tabs Names</strong>
+                <small>Show all tabs on the current form</small>
+              </span>
+            </button>
+
+            <button
+              id="getFieldValue"
+              class="tool-card"
+              data-label="get field current record value"
+            >
+              <span class="tool-icon">◫</span>
+
+              <span class="tool-content">
+                <strong>Get Field Value</strong>
+                <small>Read field value from current record</small>
+              </span>
+            </button>
+
+            <button
+              id="showDirtyFields"
+              class="tool-card"
+              data-label="show dirty fields modified changed"
+            >
+              <span class="tool-icon">✎</span>
+
+              <span class="tool-content">
+                <strong>Show Dirty Fields</strong>
+                <small>Show fields changed on the form</small>
+              </span>
+            </button>
+
+            <button
+              id="openDefaultView"
+              class="tool-card"
+              data-label="open entity view default entity view"
+            >
+              <span class="tool-icon">☰</span>
+
+              <span class="tool-content">
+                <strong>Open Entity View</strong>
+                <small>Open the current entity view</small>
+              </span>
+            </button>
+          </div>
         </section>
 
-        <section class="nav-group" data-group="data">
-          <div class="nav-group-title">Data & Queries</div>
-          <button id="fetchBuilderUi" class="nav-item nav-item-accent" data-label="fetch builder metadata fields conditions and or optionset">
-            <span class="nav-icon">🧱</span>
-            <span class="nav-text">Fetch Builder</span>
-          </button>
-          <button id="quickUpdateFieldUi" class="nav-item nav-item-accent" data-label="quick update field update record field value">
-            <span class="nav-icon">⚡</span>
-            <span class="nav-text">Quick Update Field</span>
-          </button>
-          <button id="apiTesterUi" class="nav-item nav-item-accent" data-label="api tester custom action custom api web api execute request">
-            <span class="nav-icon">⚙</span>
-            <span class="nav-text">API Tester</span>
-          </button>
-          <button id="retrieveByIdUi" class="nav-item" data-label="retrieve by guid retrieve by id guid">
-            <span class="nav-icon">⌘</span>
-            <span class="nav-text">Retrieve by Guid</span>
-          </button>
+        <!-- Data -->
+        <section class="tool-category">
+          <div class="category-header">
+            <div class="category-icon">⌘</div>
 
-          <button id="retrieveMultiple" class="nav-item" data-label="retrieve multiple multiple query">
-            <span class="nav-icon">≣</span>
-            <span class="nav-text">Retrieve Multiple</span>
-          </button>
+            <div>
+              <h2>Data & Queries</h2>
+              <p>Records, FetchXML and Web API</p>
+            </div>
+          </div>
 
-          <button id="fetchXmlUi" class="nav-item" data-label="fetchxml tester fetchxml">
-            <span class="nav-icon">&lt;/&gt;</span>
-            <span class="nav-text">FetchXml Tester</span>
-          </button>
+          <div class="tools-grid">
+            <button
+              id="fetchBuilderUi"
+              class="tool-card 
+              data-label="fetch builder metadata fields conditions and or optionset"
+            >
+              <span class="tool-icon">🧱</span>
 
-          <button id="openAdvancedFind" class="nav-item" data-label="advanced search advanced find">
-            <span class="nav-icon">⌕</span>
-            <span class="nav-text">Advanced Search</span>
-          </button>
+              <span class="tool-content">
+                <strong>Fetch Builder</strong>
+                <small>Build FetchXML using a visual editor</small>
+              </span>
+            </button>
 
-          <button id="getSystemParam" class="nav-item" data-label="retrieve system params system params">
-            <span class="nav-icon">⚙</span>
-            <span class="nav-text">Retrieve System Params</span>
-          </button>
+            <button
+              id="quickUpdateFieldUi"
+              class="tool-card  
+              data-label="quick update field update record field value"
+            >
+              <span class="tool-icon">⚡</span>
 
-          <button id="searchSystemParams" class="nav-item" data-label="system params by value search value">
-            <span class="nav-icon">⌗</span>
-            <span class="nav-text">System Params - By Value</span>
-          </button>
-          <button id="openRecordByGuidUi" class="nav-item nav-item-accent" data-label="open record by guid resolve guid entity">
-            <span class="nav-icon">🔎</span>
-            <span class="nav-text">Open Record By GUID</span>
-          </button>
+              <span class="tool-content">
+                <strong>Quick Update Field</strong>
+                <small>Update a record field quickly</small>
+              </span>
+            </button>
+
+            <button
+              id="apiTesterUi"
+              class="tool-card"
+              data-label="api tester custom action custom api web api execute request"
+            >
+              <span class="tool-icon">⚙</span>
+
+              <span class="tool-content">
+                <strong>API Tester</strong>
+                <small>Execute Web API and Custom API requests</small>
+              </span>
+            </button>
+
+            <button
+              id="retrieveByIdUi"
+              class="tool-card"
+              data-label="retrieve by guid retrieve by id guid"
+            >
+              <span class="tool-icon">⌘</span>
+
+              <span class="tool-content">
+                <strong>Retrieve By GUID</strong>
+                <small>Retrieve a record using its ID</small>
+              </span>
+            </button>
+
+            <button
+              id="retrieveMultiple"
+              class="tool-card"
+              data-label="retrieve multiple multiple query"
+            >
+              <span class="tool-icon">≣</span>
+
+              <span class="tool-content">
+                <strong>Retrieve Multiple</strong>
+                <small>Query multiple Dataverse records</small>
+              </span>
+            </button>
+
+            <button
+              id="fetchXmlUi"
+              class="tool-card"
+              data-label="fetchxml tester fetchxml"
+            >
+              <span class="tool-icon">&lt;/&gt;</span>
+
+              <span class="tool-content">
+                <strong>FetchXML Tester</strong>
+                <small>Execute and inspect FetchXML</small>
+              </span>
+            </button>
+
+            <button
+              id="openAdvancedFind"
+              class="tool-card"
+              data-label="advanced search advanced find"
+            >
+              <span class="tool-icon">⌕</span>
+
+              <span class="tool-content">
+                <strong>Advanced Search</strong>
+                <small>Open Dynamics advanced search</small>
+              </span>
+            </button>
+
+            <button
+              id="getSystemParam"
+              class="tool-card"
+              data-label="retrieve system params system params"
+            >
+              <span class="tool-icon">⚙</span>
+
+              <span class="tool-content">
+                <strong>Retrieve System Params</strong>
+                <small>Retrieve configured system parameters</small>
+              </span>
+            </button>
+
+            <button
+              id="searchSystemParams"
+              class="tool-card"
+              data-label="system params by value search value"
+            >
+              <span class="tool-icon">⌗</span>
+
+              <span class="tool-content">
+                <strong>System Params By Value</strong>
+                <small>Search parameters by configured value</small>
+              </span>
+            </button>
+
+            <button
+              id="openRecordByGuidUi"
+              class="tool-card  
+              data-label="open record by guid resolve guid entity"
+            >
+              <span class="tool-icon">🔎</span>
+
+              <span class="tool-content">
+                <strong>Open Record By GUID</strong>
+                <small>Resolve and open a Dataverse record</small>
+              </span>
+            </button>
+          </div>
         </section>
 
-        <section class="nav-group" data-group="security">
-          <div class="nav-group-title">Security & Roles</div>
+        <!-- Security -->
+        <section class="tool-category">
+          <div class="category-header">
+            <div class="category-icon">🛡</div>
 
-          <button id="getRolePermissions" class="nav-item" data-label="role permissions permissions security">
-            <span class="nav-icon">🛡</span>
-            <span class="nav-text">Role Permissions</span>
-          </button>
+            <div>
+              <h2>Security & Teams</h2>
+              <p>Roles, privileges and team membership</p>
+            </div>
+          </div>
 
-          <button id="getSystemRolesByPrivilege" class="nav-item" data-label="roles by privilege privilege roles">
-            <span class="nav-icon">🔑</span>
-            <span class="nav-text">Roles By Privilege</span>
-          </button>
+          <div class="tools-grid">
+            <button
+              id="securityRolesUi"
+              class="tool-card  
+              data-label="assign security role assign role user"
+            >
+              <span class="tool-icon">＋</span>
 
-          <button id="securityRolesUi" class="nav-item nav-item-accent" data-label="assign security role assign role user">
-            <span class="nav-icon">＋</span>
-            <span class="nav-text">Security Role</span>
-          </button>
+              <span class="tool-content">
+                <strong>Security Role</strong>
+                <small>Assign or remove roles from users</small>
+              </span>
+            </button>
 
-   
+            <button
+              id="teamManagementUi"
+              class="tool-card  
+              data-label="team management teams users add remove membership"
+            >
+              <span class="tool-icon">👥</span>
+
+              <span class="tool-content">
+                <strong>Team Management</strong>
+                <small>Add and remove users from teams</small>
+              </span>
+            </button>
+
+            <button
+              id="getRolePermissions"
+              class="tool-card"
+              data-label="role permissions permissions security"
+            >
+              <span class="tool-icon">🛡</span>
+
+              <span class="tool-content">
+                <strong>Role Permissions</strong>
+                <small>View privileges assigned to a role</small>
+              </span>
+            </button>
+
+            <button
+              id="getSystemRolesByPrivilege"
+              class="tool-card"
+              data-label="roles by privilege privilege roles"
+            >
+              <span class="tool-icon">🔑</span>
+
+              <span class="tool-content">
+                <strong>Roles By Privilege</strong>
+                <small>Find roles containing a privilege</small>
+              </span>
+            </button>
+          </div>
         </section>
 
-        <section class="nav-group" data-group="debug">
-          <div class="nav-group-title">Debug & Utilities</div>
-          <button id="whyDidThisHappenUi" class="nav-item nav-item-accent" data-label="why did this happen field debug recorder">
-            <span class="nav-icon">❓</span>
-            <span class="nav-text">Why Did This Happen</span>
-          </button>
-          <button id="elementInspector" class="nav-item" data-label="ribbon enable rules js functions">
-            <span class="nav-icon">🎀</span>
-            <span class="nav-text">Elements Deep Inspector</span>
-          </button>
-          <button id="ribbondebug" class="nav-item" data-label="add ribbon debug ribbon debug">
-            <span class="nav-icon">✦</span>
-            <span class="nav-text">Add Ribbon Debug</span>
-          </button>
-          <button id="pluginPipelineVisualizer" class="nav-item nav-item-accent" data-label="plugin pipeline visualizer sdkmessageprocessingstep plugins steps">
-            <span class="nav-icon">🧩</span>
-            <span class="nav-text">Plugin Pipeline</span>
-          </button>
-           <button id="pluginTraceExplorer" class="nav-item nav-item-accent" data-label="plugin trace explorer plugintracelog errors exceptions">
-            <span class="nav-icon">🧾</span>
-            <span class="nav-text">Plugin Trace Explorer</span>
-          </button>
-          <button id="shareExt" class="nav-item nav-item-share" data-label="share install extension share install">
-            <span class="nav-icon">⇪</span>
-            <span class="nav-text">Share / Install</span>
-          </button>
+        <!-- Debug -->
+        <section class="tool-category">
+          <div class="category-header">
+            <div class="category-icon">🧩</div>
 
+            <div>
+              <h2>Debug & Utilities</h2>
+              <p>Diagnostics, ribbon and plugin tools</p>
+            </div>
+          </div>
+
+          <div class="tools-grid">
+            <button
+              id="whyDidThisHappenUi"
+              class="tool-card  
+              data-label="why did this happen field debug recorder"
+            >
+              <span class="tool-icon">❓</span>
+
+              <span class="tool-content">
+                <strong>Why Did This Happen</strong>
+                <small>Track changes made to form fields</small>
+              </span>
+            </button>
+
+            <button
+              id="elementInspector"
+              class="tool-card"
+              data-label="ribbon enable rules js functions"
+            >
+              <span class="tool-icon">🎀</span>
+
+              <span class="tool-content">
+                <strong>Elements Deep Inspector</strong>
+                <small>Inspect ribbon and interface elements</small>
+              </span>
+            </button>
+
+            <button
+              id="ribbondebug"
+              class="tool-card"
+              data-label="add ribbon debug ribbon debug"
+            >
+              <span class="tool-icon">✦</span>
+
+              <span class="tool-content">
+                <strong>Add Ribbon Debug</strong>
+                <small>Enable ribbon debugging tools</small>
+              </span>
+            </button>
+
+            <button
+              id="pluginPipelineVisualizer"
+              class="tool-card"
+              data-label="plugin pipeline visualizer sdkmessageprocessingstep plugins steps"
+            >
+              <span class="tool-icon">🧩</span>
+
+              <span class="tool-content">
+                <strong>Plugin Pipeline</strong>
+                <small>Inspect registered plugin steps</small>
+              </span>
+            </button>
+
+            <button
+              id="pluginTraceExplorer"
+              class="tool-card"
+              data-label="plugin trace explorer plugintracelog errors exceptions"
+            >
+              <span class="tool-icon">🧾</span>
+
+              <span class="tool-content">
+                <strong>Plugin Trace Explorer</strong>
+                <small>View plugin errors and trace logs</small>
+              </span>
+            </button>
+
+            <button
+              id="shareExt"
+              class="tool-card tool-card-share"
+              data-label="share install extension share install"
+            >
+              <span class="tool-icon">⇪</span>
+
+              <span class="tool-content">
+                <strong>Share / Install</strong>
+                <small>Share or install the extension</small>
+              </span>
+            </button>
+          </div>
         </section>
       </main>
     </div>
-
-    <script>
-      const toolSearch = document.getElementById("toolSearch");
-
-      toolSearch?.addEventListener("input", () => {
-        const q = toolSearch.value.trim().toLowerCase();
-        const items = document.querySelectorAll(".nav-item");
-        const groups = document.querySelectorAll(".nav-group");
-
-        items.forEach((item) => {
-          const text = (item.dataset.label || item.textContent || "").toLowerCase();
-          item.style.display = !q || text.includes(q) ? "" : "none";
-        });
-
-        groups.forEach((group) => {
-          const visibleItems = [...group.querySelectorAll(".nav-item")].filter(
-            (item) => item.style.display !== "none"
-          );
-          group.style.display = visibleItems.length ? "" : "none";
-        });
-      });
-    </script>
 
     <script src="popup.js"></script>
   </body>

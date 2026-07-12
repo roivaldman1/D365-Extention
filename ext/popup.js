@@ -10109,3 +10109,1586 @@ ${filterXml}
     }
   });
 });
+
+
+
+document.getElementById("teamManagementUi")?.addEventListener("click", async () => {
+  const tab = await __d365GetActiveTab();
+  if (!tab?.id) return;
+
+  await chrome.scripting.executeScript({
+    target: {
+      tabId: tab.id,
+      allFrames: false
+    },
+    world: "MAIN",
+    func: async () => {
+      document.getElementById("__d365_team_management")?.remove();
+
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+
+      const state = {
+        mode: "manage-team",
+        selectedTeam: null,
+        selectedUser: null,
+        teamSearchResults: [],
+        userSearchResults: [],
+        teamMembers: [],
+        userTeams: []
+      };
+
+      const normalizeGuid = (value) =>
+        String(value || "")
+          .replace(/[{}]/g, "")
+          .trim()
+          .toLowerCase();
+
+      const escapeHtml = (value) =>
+        String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+
+      const escapeOData = (value) =>
+        String(value ?? "").replaceAll("'", "''");
+
+      const getErrorMessage = (data, fallback) =>
+        data?.error?.message ||
+        data?.Message ||
+        fallback ||
+        "Unknown Dataverse error";
+
+      const fetchJson = async (url, options = {}) => {
+        const response = await fetch(url, {
+          ...options,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            ...(options.headers || {})
+          }
+        });
+
+        if (response.status === 204) {
+          return null;
+        }
+
+        const text = await response.text();
+        let data = null;
+
+        if (text) {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = {
+              raw: text
+            };
+          }
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            getErrorMessage(
+              data,
+              `Request failed: ${response.status} ${response.statusText}`
+            )
+          );
+        }
+
+        return data;
+      };
+
+      const fetchAll = async (url) => {
+        const rows = [];
+
+        while (url) {
+          const data = await fetchJson(url);
+
+          rows.push(...(data?.value || []));
+          url = data?.["@odata.nextLink"] || null;
+        }
+
+        return rows;
+      };
+
+      const getTeamTypeText = (teamType) => {
+        const value = Number(teamType);
+
+        switch (value) {
+          case 0:
+            return "Owner Team";
+          case 1:
+            return "Access Team";
+          case 2:
+            return "Microsoft Entra Security Group";
+          case 3:
+            return "Microsoft Entra Office Group";
+          default:
+            return `Team Type ${teamType}`;
+        }
+      };
+
+      const isManagedExternally = (team) =>
+        Number(team?.teamtype) === 2 || Number(team?.teamtype) === 3;
+
+      const overlay = document.createElement("div");
+      overlay.id = "__d365_team_management";
+
+      overlay.style.cssText = `
+        position:fixed;
+        inset:0;
+        z-index:2147483647;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        padding:18px;
+        background:rgba(15,23,42,.45);
+        direction:ltr;
+      `;
+
+      const box = document.createElement("div");
+
+      box.style.cssText = `
+        width:min(1180px,96vw);
+        height:min(850px,94vh);
+        display:flex;
+        flex-direction:column;
+        overflow:hidden;
+        border-radius:18px;
+        background:#ffffff;
+        box-shadow:0 24px 70px rgba(0,0,0,.35);
+        font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+        color:#0f172a;
+      `;
+
+      box.innerHTML = `
+        <div style="
+          display:flex;
+          align-items:center;
+          justify-content:space-between;
+          gap:12px;
+          padding:16px 18px;
+          border-bottom:1px solid #e2e8f0;
+          background:#f8fafc;
+        ">
+          <div>
+            <div style="font-size:18px;font-weight:900;">
+              👥 Team Management
+            </div>
+
+            <div style="margin-top:3px;font-size:12px;color:#64748b;">
+              Add users to teams, remove users and inspect team memberships
+            </div>
+          </div>
+
+          <button
+            id="tmClose"
+            type="button"
+            style="
+              padding:9px 14px;
+              border:1px solid #cbd5e1;
+              border-radius:10px;
+              background:#ffffff;
+              font-weight:800;
+              cursor:pointer;
+            "
+          >
+            Close
+          </button>
+        </div>
+
+        <div style="
+          display:flex;
+          gap:8px;
+          padding:12px 18px;
+          border-bottom:1px solid #e2e8f0;
+          background:#ffffff;
+        ">
+          <button
+            id="tmModeManageTeam"
+            type="button"
+            style="
+              padding:10px 14px;
+              border:none;
+              border-radius:10px;
+              background:#2563eb;
+              color:#ffffff;
+              font-weight:800;
+              cursor:pointer;
+            "
+          >
+            Manage Team Members
+          </button>
+
+          <button
+            id="tmModeUserTeams"
+            type="button"
+            style="
+              padding:10px 14px;
+              border:1px solid #cbd5e1;
+              border-radius:10px;
+              background:#ffffff;
+              color:#0f172a;
+              font-weight:800;
+              cursor:pointer;
+            "
+          >
+            View User Teams
+          </button>
+        </div>
+
+        <div
+          id="tmStatus"
+          style="
+            display:none;
+            margin:12px 18px 0;
+            padding:10px 12px;
+            border-radius:10px;
+            font-size:13px;
+            font-weight:700;
+          "
+        ></div>
+
+        <div
+          id="tmManageTeamPage"
+          style="
+            flex:1;
+            min-height:0;
+            padding:16px 18px 18px;
+            display:grid;
+            grid-template-columns:minmax(280px,.85fr) minmax(420px,1.4fr);
+            gap:16px;
+          "
+        >
+          <div style="
+            min-height:0;
+            display:flex;
+            flex-direction:column;
+            border:1px solid #e2e8f0;
+            border-radius:14px;
+            overflow:hidden;
+          ">
+            <div style="padding:14px;border-bottom:1px solid #e2e8f0;">
+              <div style="font-weight:900;margin-bottom:8px;">
+                1. Search Team
+              </div>
+
+              <div style="display:flex;gap:8px;">
+                <input
+                  id="tmTeamSearch"
+                  type="text"
+                  placeholder="Team name..."
+                  style="
+                    flex:1;
+                    min-width:0;
+                    padding:10px 11px;
+                    border:1px solid #cbd5e1;
+                    border-radius:10px;
+                    outline:none;
+                  "
+                />
+
+                <button
+                  id="tmSearchTeamButton"
+                  type="button"
+                  style="
+                    padding:10px 13px;
+                    border:none;
+                    border-radius:10px;
+                    background:#2563eb;
+                    color:#ffffff;
+                    font-weight:800;
+                    cursor:pointer;
+                  "
+                >
+                  Search
+                </button>
+              </div>
+            </div>
+
+            <div
+              id="tmTeamResults"
+              style="
+                flex:1;
+                min-height:0;
+                overflow:auto;
+                padding:8px;
+              "
+            >
+              <div style="padding:20px;text-align:center;color:#64748b;">
+                Search for a team
+              </div>
+            </div>
+          </div>
+
+          <div style="
+            min-height:0;
+            display:flex;
+            flex-direction:column;
+            border:1px solid #e2e8f0;
+            border-radius:14px;
+            overflow:hidden;
+          ">
+            <div
+              id="tmSelectedTeamHeader"
+              style="
+                padding:14px;
+                border-bottom:1px solid #e2e8f0;
+                background:#f8fafc;
+              "
+            >
+              <div style="font-weight:900;">
+                2. Select a team
+              </div>
+
+              <div style="margin-top:4px;font-size:12px;color:#64748b;">
+                Team members will appear here
+              </div>
+            </div>
+
+            <div
+              id="tmAddUserArea"
+              style="
+                display:none;
+                padding:12px 14px;
+                border-bottom:1px solid #e2e8f0;
+              "
+            >
+              <div style="font-weight:800;margin-bottom:8px;">
+                Add user to selected team
+              </div>
+
+              <div style="display:flex;gap:8px;">
+                <input
+                  id="tmUserSearch"
+                  type="text"
+                  placeholder="User name or email..."
+                  style="
+                    flex:1;
+                    min-width:0;
+                    padding:10px 11px;
+                    border:1px solid #cbd5e1;
+                    border-radius:10px;
+                    outline:none;
+                  "
+                />
+
+                <button
+                  id="tmSearchUserButton"
+                  type="button"
+                  style="
+                    padding:10px 13px;
+                    border:none;
+                    border-radius:10px;
+                    background:#0f766e;
+                    color:#ffffff;
+                    font-weight:800;
+                    cursor:pointer;
+                  "
+                >
+                  Search User
+                </button>
+              </div>
+
+              <div
+                id="tmUserSearchResults"
+                style="
+                  display:none;
+                  max-height:210px;
+                  overflow:auto;
+                  margin-top:8px;
+                  border:1px solid #e2e8f0;
+                  border-radius:10px;
+                  padding:6px;
+                  background:#ffffff;
+                "
+              ></div>
+            </div>
+
+            <div
+              id="tmMembers"
+              style="
+                flex:1;
+                min-height:0;
+                overflow:auto;
+                padding:8px;
+              "
+            >
+              <div style="padding:30px;text-align:center;color:#64748b;">
+                No team selected
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          id="tmUserTeamsPage"
+          style="
+            flex:1;
+            min-height:0;
+            display:none;
+            padding:16px 18px 18px;
+            grid-template-columns:minmax(280px,.85fr) minmax(420px,1.4fr);
+            gap:16px;
+          "
+        >
+          <div style="
+            min-height:0;
+            display:flex;
+            flex-direction:column;
+            border:1px solid #e2e8f0;
+            border-radius:14px;
+            overflow:hidden;
+          ">
+            <div style="padding:14px;border-bottom:1px solid #e2e8f0;">
+              <div style="font-weight:900;margin-bottom:8px;">
+                1. Search User
+              </div>
+
+              <div style="display:flex;gap:8px;">
+                <input
+                  id="tmInspectUserSearch"
+                  type="text"
+                  placeholder="User name or email..."
+                  style="
+                    flex:1;
+                    min-width:0;
+                    padding:10px 11px;
+                    border:1px solid #cbd5e1;
+                    border-radius:10px;
+                    outline:none;
+                  "
+                />
+
+                <button
+                  id="tmInspectUserSearchButton"
+                  type="button"
+                  style="
+                    padding:10px 13px;
+                    border:none;
+                    border-radius:10px;
+                    background:#2563eb;
+                    color:#ffffff;
+                    font-weight:800;
+                    cursor:pointer;
+                  "
+                >
+                  Search
+                </button>
+              </div>
+            </div>
+
+            <div
+              id="tmInspectUserResults"
+              style="
+                flex:1;
+                min-height:0;
+                overflow:auto;
+                padding:8px;
+              "
+            >
+              <div style="padding:20px;text-align:center;color:#64748b;">
+                Search for a user
+              </div>
+            </div>
+          </div>
+
+          <div style="
+            min-height:0;
+            display:flex;
+            flex-direction:column;
+            border:1px solid #e2e8f0;
+            border-radius:14px;
+            overflow:hidden;
+          ">
+            <div
+              id="tmSelectedUserHeader"
+              style="
+                padding:14px;
+                border-bottom:1px solid #e2e8f0;
+                background:#f8fafc;
+              "
+            >
+              <div style="font-weight:900;">
+                2. Select a user
+              </div>
+
+              <div style="margin-top:4px;font-size:12px;color:#64748b;">
+                The user's teams will appear here
+              </div>
+            </div>
+
+            <div
+              id="tmUserTeams"
+              style="
+                flex:1;
+                min-height:0;
+                overflow:auto;
+                padding:8px;
+              "
+            >
+              <div style="padding:30px;text-align:center;color:#64748b;">
+                No user selected
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      const $ = (selector) => box.querySelector(selector);
+
+      const elements = {
+        close: $("#tmClose"),
+        status: $("#tmStatus"),
+
+        modeManageTeam: $("#tmModeManageTeam"),
+        modeUserTeams: $("#tmModeUserTeams"),
+
+        manageTeamPage: $("#tmManageTeamPage"),
+        userTeamsPage: $("#tmUserTeamsPage"),
+
+        teamSearch: $("#tmTeamSearch"),
+        searchTeamButton: $("#tmSearchTeamButton"),
+        teamResults: $("#tmTeamResults"),
+
+        selectedTeamHeader: $("#tmSelectedTeamHeader"),
+        addUserArea: $("#tmAddUserArea"),
+        userSearch: $("#tmUserSearch"),
+        searchUserButton: $("#tmSearchUserButton"),
+        userSearchResults: $("#tmUserSearchResults"),
+        members: $("#tmMembers"),
+
+        inspectUserSearch: $("#tmInspectUserSearch"),
+        inspectUserSearchButton: $("#tmInspectUserSearchButton"),
+        inspectUserResults: $("#tmInspectUserResults"),
+        selectedUserHeader: $("#tmSelectedUserHeader"),
+        userTeams: $("#tmUserTeams")
+      };
+
+      let statusTimeout = null;
+
+      const showStatus = (message, type = "info") => {
+        clearTimeout(statusTimeout);
+
+        const styles = {
+          info: {
+            background: "#eff6ff",
+            color: "#1d4ed8",
+            border: "#bfdbfe"
+          },
+          success: {
+            background: "#f0fdf4",
+            color: "#15803d",
+            border: "#bbf7d0"
+          },
+          error: {
+            background: "#fef2f2",
+            color: "#b91c1c",
+            border: "#fecaca"
+          },
+          warning: {
+            background: "#fffbeb",
+            color: "#a16207",
+            border: "#fde68a"
+          }
+        };
+
+        const selectedStyle = styles[type] || styles.info;
+
+        elements.status.style.display = "block";
+        elements.status.style.background = selectedStyle.background;
+        elements.status.style.color = selectedStyle.color;
+        elements.status.style.border = `1px solid ${selectedStyle.border}`;
+        elements.status.textContent = message;
+
+        if (type === "success" || type === "info") {
+          statusTimeout = setTimeout(() => {
+            elements.status.style.display = "none";
+          }, 4000);
+        }
+      };
+
+      const setButtonLoading = (button, isLoading, loadingText) => {
+        if (isLoading) {
+          button.dataset.originalText = button.textContent;
+          button.textContent = loadingText || "Loading...";
+          button.disabled = true;
+          button.style.opacity = ".65";
+          button.style.cursor = "wait";
+        } else {
+          button.textContent =
+            button.dataset.originalText || button.textContent;
+          button.disabled = false;
+          button.style.opacity = "1";
+          button.style.cursor = "pointer";
+        }
+      };
+
+      const createEmptyMessage = (text) => `
+        <div style="
+          padding:30px;
+          text-align:center;
+          color:#64748b;
+        ">
+          ${escapeHtml(text)}
+        </div>
+      `;
+
+      const setMode = (mode) => {
+        state.mode = mode;
+
+        const manageSelected = mode === "manage-team";
+
+        elements.manageTeamPage.style.display = manageSelected
+          ? "grid"
+          : "none";
+
+        elements.userTeamsPage.style.display = manageSelected
+          ? "none"
+          : "grid";
+
+        elements.modeManageTeam.style.background = manageSelected
+          ? "#2563eb"
+          : "#ffffff";
+
+        elements.modeManageTeam.style.color = manageSelected
+          ? "#ffffff"
+          : "#0f172a";
+
+        elements.modeManageTeam.style.border = manageSelected
+          ? "none"
+          : "1px solid #cbd5e1";
+
+        elements.modeUserTeams.style.background = manageSelected
+          ? "#ffffff"
+          : "#2563eb";
+
+        elements.modeUserTeams.style.color = manageSelected
+          ? "#0f172a"
+          : "#ffffff";
+
+        elements.modeUserTeams.style.border = manageSelected
+          ? "1px solid #cbd5e1"
+          : "none";
+      };
+
+      const searchTeams = async () => {
+        const searchText = elements.teamSearch.value.trim();
+
+        if (searchText.length < 2) {
+          showStatus("Enter at least 2 characters for the team search.", "warning");
+          return;
+        }
+
+        setButtonLoading(
+          elements.searchTeamButton,
+          true,
+          "Searching..."
+        );
+
+        elements.teamResults.innerHTML =
+          createEmptyMessage("Searching teams...");
+
+        try {
+          const safeText = escapeOData(searchText);
+
+          const url =
+            `${clientUrl}/api/data/v9.2/teams` +
+            `?$select=teamid,name,teamtype,isdefault,description` +
+            `&$filter=contains(name,'${safeText}')` +
+            `&$orderby=name asc` +
+            `&$top=100`;
+
+          const data = await fetchJson(url);
+
+          state.teamSearchResults = data?.value || [];
+
+          renderTeamResults();
+        } catch (error) {
+          console.error("Team search failed", error);
+
+          elements.teamResults.innerHTML =
+            createEmptyMessage("Failed loading teams");
+
+          showStatus(
+            `Team search failed: ${error.message || error}`,
+            "error"
+          );
+        } finally {
+          setButtonLoading(elements.searchTeamButton, false);
+        }
+      };
+
+      const renderTeamResults = () => {
+        elements.teamResults.innerHTML = "";
+
+        if (!state.teamSearchResults.length) {
+          elements.teamResults.innerHTML =
+            createEmptyMessage("No teams found");
+          return;
+        }
+
+        state.teamSearchResults.forEach((team) => {
+          const selected =
+            normalizeGuid(state.selectedTeam?.teamid) ===
+            normalizeGuid(team.teamid);
+
+          const row = document.createElement("button");
+          row.type = "button";
+
+          row.style.cssText = `
+            width:100%;
+            display:block;
+            padding:11px 12px;
+            margin-bottom:6px;
+            border:1px solid ${selected ? "#93c5fd" : "#e2e8f0"};
+            border-radius:10px;
+            background:${selected ? "#eff6ff" : "#ffffff"};
+            text-align:left;
+            cursor:pointer;
+          `;
+
+          row.innerHTML = `
+            <div style="font-weight:850;color:#0f172a;">
+              ${escapeHtml(team.name || "Unnamed Team")}
+            </div>
+
+            <div style="
+              display:flex;
+              gap:6px;
+              align-items:center;
+              flex-wrap:wrap;
+              margin-top:5px;
+              font-size:11px;
+              color:#64748b;
+            ">
+              <span>${escapeHtml(getTeamTypeText(team.teamtype))}</span>
+
+              ${
+                team.isdefault
+                  ? `
+                    <span style="
+                      padding:2px 6px;
+                      border-radius:999px;
+                      background:#f1f5f9;
+                      color:#475569;
+                    ">
+                      Default
+                    </span>
+                  `
+                  : ""
+              }
+
+              ${
+                isManagedExternally(team)
+                  ? `
+                    <span style="
+                      padding:2px 6px;
+                      border-radius:999px;
+                      background:#fff7ed;
+                      color:#c2410c;
+                    ">
+                      Externally managed
+                    </span>
+                  `
+                  : ""
+              }
+            </div>
+          `;
+
+          row.onclick = () => selectTeam(team);
+
+          elements.teamResults.appendChild(row);
+        });
+      };
+
+      const selectTeam = async (team) => {
+        state.selectedTeam = team;
+
+        renderTeamResults();
+
+        elements.selectedTeamHeader.innerHTML = `
+          <div style="font-weight:900;font-size:15px;">
+            ${escapeHtml(team.name || "Unnamed Team")}
+          </div>
+
+          <div style="margin-top:4px;font-size:12px;color:#64748b;">
+            ${escapeHtml(getTeamTypeText(team.teamtype))}
+            ·
+            ${escapeHtml(team.teamid)}
+          </div>
+
+          ${
+            isManagedExternally(team)
+              ? `
+                <div style="
+                  margin-top:8px;
+                  padding:8px 10px;
+                  border:1px solid #fed7aa;
+                  border-radius:8px;
+                  background:#fff7ed;
+                  color:#c2410c;
+                  font-size:12px;
+                  font-weight:700;
+                ">
+                  Membership of this Entra group team is managed externally.
+                </div>
+              `
+              : ""
+          }
+        `;
+
+        elements.addUserArea.style.display = isManagedExternally(team)
+          ? "none"
+          : "block";
+
+        elements.userSearch.value = "";
+        elements.userSearchResults.innerHTML = "";
+        elements.userSearchResults.style.display = "none";
+
+        await loadTeamMembers();
+      };
+
+      const loadTeamMembers = async () => {
+        if (!state.selectedTeam?.teamid) return;
+
+        elements.members.innerHTML =
+          createEmptyMessage("Loading team members...");
+
+        try {
+          const teamId = normalizeGuid(state.selectedTeam.teamid);
+
+          const url =
+            `${clientUrl}/api/data/v9.2/teams(${teamId})` +
+            `/teammembership_association` +
+            `?$select=systemuserid,fullname,internalemailaddress,domainname,isdisabled` +
+            `&$orderby=fullname asc`;
+
+          state.teamMembers = await fetchAll(url);
+
+          renderTeamMembers();
+        } catch (error) {
+          console.error("Loading team members failed", error);
+
+          elements.members.innerHTML =
+            createEmptyMessage("Failed loading team members");
+
+          showStatus(
+            `Failed loading team members: ${error.message || error}`,
+            "error"
+          );
+        }
+      };
+
+      const renderTeamMembers = () => {
+        elements.members.innerHTML = "";
+
+        if (!state.teamMembers.length) {
+          elements.members.innerHTML =
+            createEmptyMessage("This team has no users");
+          return;
+        }
+
+        const title = document.createElement("div");
+        title.style.cssText = `
+          padding:7px 6px 11px;
+          font-size:12px;
+          color:#64748b;
+          font-weight:800;
+        `;
+
+        title.textContent = `${state.teamMembers.length} team member(s)`;
+        elements.members.appendChild(title);
+
+        state.teamMembers.forEach((user) => {
+          const row = document.createElement("div");
+
+          row.style.cssText = `
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:11px 12px;
+            margin-bottom:6px;
+            border:1px solid #e2e8f0;
+            border-radius:10px;
+            background:#ffffff;
+          `;
+
+          const details = document.createElement("div");
+          details.style.cssText = "min-width:0;flex:1;";
+
+          details.innerHTML = `
+            <div style="
+              font-weight:850;
+              overflow:hidden;
+              text-overflow:ellipsis;
+              white-space:nowrap;
+            ">
+              ${escapeHtml(user.fullname || user.domainname || "Unnamed User")}
+
+              ${
+                user.isdisabled
+                  ? `
+                    <span style="
+                      margin-left:6px;
+                      padding:2px 6px;
+                      border-radius:999px;
+                      background:#fee2e2;
+                      color:#b91c1c;
+                      font-size:10px;
+                    ">
+                      Disabled
+                    </span>
+                  `
+                  : ""
+              }
+            </div>
+
+            <div style="
+              margin-top:4px;
+              color:#64748b;
+              font-size:12px;
+              overflow:hidden;
+              text-overflow:ellipsis;
+              white-space:nowrap;
+            ">
+              ${escapeHtml(
+                user.internalemailaddress ||
+                  user.domainname ||
+                  user.systemuserid
+              )}
+            </div>
+          `;
+
+          row.appendChild(details);
+
+          if (!isManagedExternally(state.selectedTeam)) {
+            const removeButton = document.createElement("button");
+            removeButton.type = "button";
+            removeButton.textContent = "Remove";
+
+            removeButton.style.cssText = `
+              flex:none;
+              padding:8px 11px;
+              border:1px solid #fecaca;
+              border-radius:9px;
+              background:#ffffff;
+              color:#b91c1c;
+              font-weight:800;
+              cursor:pointer;
+            `;
+
+            removeButton.onclick = () =>
+              removeUserFromTeam(user, removeButton);
+
+            row.appendChild(removeButton);
+          }
+
+          elements.members.appendChild(row);
+        });
+      };
+
+      const searchUsersForTeam = async () => {
+        if (!state.selectedTeam?.teamid) {
+          showStatus("Select a team first.", "warning");
+          return;
+        }
+
+        if (isManagedExternally(state.selectedTeam)) {
+          showStatus(
+            "This team is managed by Microsoft Entra ID.",
+            "warning"
+          );
+          return;
+        }
+
+        const searchText = elements.userSearch.value.trim();
+
+        if (searchText.length < 2) {
+          showStatus("Enter at least 2 characters for user search.", "warning");
+          return;
+        }
+
+        setButtonLoading(
+          elements.searchUserButton,
+          true,
+          "Searching..."
+        );
+
+        elements.userSearchResults.style.display = "block";
+        elements.userSearchResults.innerHTML =
+          createEmptyMessage("Searching users...");
+
+        try {
+          const safeText = escapeOData(searchText);
+
+          const filter =
+            `isdisabled eq false and (` +
+            `contains(fullname,'${safeText}') or ` +
+            `contains(internalemailaddress,'${safeText}') or ` +
+            `contains(domainname,'${safeText}')` +
+            `)`;
+
+          const url =
+            `${clientUrl}/api/data/v9.2/systemusers` +
+            `?$select=systemuserid,fullname,internalemailaddress,domainname,isdisabled` +
+            `&$filter=${filter}` +
+            `&$orderby=fullname asc` +
+            `&$top=50`;
+
+          const data = await fetchJson(url);
+
+          const existingMemberIds = new Set(
+            state.teamMembers.map((member) =>
+              normalizeGuid(member.systemuserid)
+            )
+          );
+
+          state.userSearchResults = (data?.value || []).map((user) => ({
+            ...user,
+            isAlreadyMember: existingMemberIds.has(
+              normalizeGuid(user.systemuserid)
+            )
+          }));
+
+          renderUsersForTeam();
+        } catch (error) {
+          console.error("User search failed", error);
+
+          elements.userSearchResults.innerHTML =
+            createEmptyMessage("Failed searching users");
+
+          showStatus(
+            `User search failed: ${error.message || error}`,
+            "error"
+          );
+        } finally {
+          setButtonLoading(elements.searchUserButton, false);
+        }
+      };
+
+      const renderUsersForTeam = () => {
+        elements.userSearchResults.innerHTML = "";
+
+        if (!state.userSearchResults.length) {
+          elements.userSearchResults.innerHTML =
+            createEmptyMessage("No users found");
+          return;
+        }
+
+        state.userSearchResults.forEach((user) => {
+          const row = document.createElement("div");
+
+          row.style.cssText = `
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            padding:9px 10px;
+            margin-bottom:5px;
+            border:1px solid #e2e8f0;
+            border-radius:9px;
+          `;
+
+          const details = document.createElement("div");
+          details.style.cssText = "min-width:0;flex:1;";
+
+          details.innerHTML = `
+            <div style="
+              font-weight:800;
+              overflow:hidden;
+              text-overflow:ellipsis;
+              white-space:nowrap;
+            ">
+              ${escapeHtml(user.fullname || user.domainname || "Unnamed User")}
+            </div>
+
+            <div style="
+              margin-top:3px;
+              color:#64748b;
+              font-size:11px;
+              overflow:hidden;
+              text-overflow:ellipsis;
+              white-space:nowrap;
+            ">
+              ${escapeHtml(
+                user.internalemailaddress ||
+                  user.domainname ||
+                  user.systemuserid
+              )}
+            </div>
+          `;
+
+          const addButton = document.createElement("button");
+          addButton.type = "button";
+
+          if (user.isAlreadyMember) {
+            addButton.textContent = "Already Member";
+            addButton.disabled = true;
+
+            addButton.style.cssText = `
+              flex:none;
+              padding:7px 10px;
+              border:1px solid #cbd5e1;
+              border-radius:8px;
+              background:#f1f5f9;
+              color:#64748b;
+              font-weight:800;
+              cursor:not-allowed;
+            `;
+          } else {
+            addButton.textContent = "Add";
+
+            addButton.style.cssText = `
+              flex:none;
+              padding:7px 12px;
+              border:none;
+              border-radius:8px;
+              background:#16a34a;
+              color:#ffffff;
+              font-weight:800;
+              cursor:pointer;
+            `;
+
+            addButton.onclick = () =>
+              addUserToTeam(user, addButton);
+          }
+
+          row.appendChild(details);
+          row.appendChild(addButton);
+
+          elements.userSearchResults.appendChild(row);
+        });
+      };
+
+      const addUserToTeam = async (user, button) => {
+        if (!state.selectedTeam?.teamid || !user?.systemuserid) {
+          return;
+        }
+
+        const teamName = state.selectedTeam.name || "the selected team";
+        const userName =
+          user.fullname ||
+          user.internalemailaddress ||
+          user.domainname ||
+          "the selected user";
+
+        const confirmed = window.confirm(
+          `Add "${userName}" to team "${teamName}"?`
+        );
+
+        if (!confirmed) return;
+
+        setButtonLoading(button, true, "Adding...");
+
+        try {
+          const teamId = normalizeGuid(state.selectedTeam.teamid);
+          const userId = normalizeGuid(user.systemuserid);
+
+          const url =
+            `${clientUrl}/api/data/v9.2/teams(${teamId})` +
+            `/teammembership_association/$ref`;
+
+          await fetchJson(url, {
+            method: "POST",
+            body: JSON.stringify({
+              "@odata.id":
+                `${clientUrl}/api/data/v9.2/systemusers(${userId})`
+            })
+          });
+
+          showStatus(
+            `${userName} was added to ${teamName}.`,
+            "success"
+          );
+
+          await loadTeamMembers();
+          await searchUsersForTeam();
+        } catch (error) {
+          console.error("Adding user to team failed", error);
+
+          showStatus(
+            `Failed adding user to team: ${error.message || error}`,
+            "error"
+          );
+
+          setButtonLoading(button, false);
+        }
+      };
+
+      const removeUserFromTeam = async (user, button) => {
+        if (!state.selectedTeam?.teamid || !user?.systemuserid) {
+          return;
+        }
+
+        const teamName = state.selectedTeam.name || "the selected team";
+        const userName =
+          user.fullname ||
+          user.internalemailaddress ||
+          user.domainname ||
+          "the selected user";
+
+        const confirmed = window.confirm(
+          `Remove "${userName}" from team "${teamName}"?`
+        );
+
+        if (!confirmed) return;
+
+        setButtonLoading(button, true, "Removing...");
+
+        try {
+          const teamId = normalizeGuid(state.selectedTeam.teamid);
+          const userId = normalizeGuid(user.systemuserid);
+
+          const url =
+            `${clientUrl}/api/data/v9.2/teams(${teamId})` +
+            `/teammembership_association(${userId})/$ref`;
+
+          await fetchJson(url, {
+            method: "DELETE"
+          });
+
+          showStatus(
+            `${userName} was removed from ${teamName}.`,
+            "success"
+          );
+
+          await loadTeamMembers();
+        } catch (error) {
+          console.error("Removing user from team failed", error);
+
+          showStatus(
+            `Failed removing user from team: ${error.message || error}`,
+            "error"
+          );
+
+          setButtonLoading(button, false);
+        }
+      };
+
+      const searchUsersForInspection = async () => {
+        const searchText = elements.inspectUserSearch.value.trim();
+
+        if (searchText.length < 2) {
+          showStatus("Enter at least 2 characters for user search.", "warning");
+          return;
+        }
+
+        setButtonLoading(
+          elements.inspectUserSearchButton,
+          true,
+          "Searching..."
+        );
+
+        elements.inspectUserResults.innerHTML =
+          createEmptyMessage("Searching users...");
+
+        try {
+          const safeText = escapeOData(searchText);
+
+          const filter =
+            `contains(fullname,'${safeText}') or ` +
+            `contains(internalemailaddress,'${safeText}') or ` +
+            `contains(domainname,'${safeText}')`;
+
+          const url =
+            `${clientUrl}/api/data/v9.2/systemusers` +
+            `?$select=systemuserid,fullname,internalemailaddress,domainname,isdisabled` +
+            `&$filter=${filter}` +
+            `&$orderby=fullname asc` +
+            `&$top=100`;
+
+          const data = await fetchJson(url);
+
+          state.userSearchResults = data?.value || [];
+
+          renderInspectionUsers();
+        } catch (error) {
+          console.error("User inspection search failed", error);
+
+          elements.inspectUserResults.innerHTML =
+            createEmptyMessage("Failed searching users");
+
+          showStatus(
+            `User search failed: ${error.message || error}`,
+            "error"
+          );
+        } finally {
+          setButtonLoading(
+            elements.inspectUserSearchButton,
+            false
+          );
+        }
+      };
+
+      const renderInspectionUsers = () => {
+        elements.inspectUserResults.innerHTML = "";
+
+        if (!state.userSearchResults.length) {
+          elements.inspectUserResults.innerHTML =
+            createEmptyMessage("No users found");
+          return;
+        }
+
+        state.userSearchResults.forEach((user) => {
+          const selected =
+            normalizeGuid(state.selectedUser?.systemuserid) ===
+            normalizeGuid(user.systemuserid);
+
+          const row = document.createElement("button");
+          row.type = "button";
+
+          row.style.cssText = `
+            width:100%;
+            display:block;
+            padding:11px 12px;
+            margin-bottom:6px;
+            border:1px solid ${selected ? "#93c5fd" : "#e2e8f0"};
+            border-radius:10px;
+            background:${selected ? "#eff6ff" : "#ffffff"};
+            text-align:left;
+            cursor:pointer;
+          `;
+
+          row.innerHTML = `
+            <div style="font-weight:850;">
+              ${escapeHtml(user.fullname || user.domainname || "Unnamed User")}
+
+              ${
+                user.isdisabled
+                  ? `
+                    <span style="
+                      margin-left:6px;
+                      padding:2px 6px;
+                      border-radius:999px;
+                      background:#fee2e2;
+                      color:#b91c1c;
+                      font-size:10px;
+                    ">
+                      Disabled
+                    </span>
+                  `
+                  : ""
+              }
+            </div>
+
+            <div style="
+              margin-top:4px;
+              font-size:12px;
+              color:#64748b;
+              overflow:hidden;
+              text-overflow:ellipsis;
+              white-space:nowrap;
+            ">
+              ${escapeHtml(
+                user.internalemailaddress ||
+                  user.domainname ||
+                  user.systemuserid
+              )}
+            </div>
+          `;
+
+          row.onclick = () => selectInspectionUser(user);
+
+          elements.inspectUserResults.appendChild(row);
+        });
+      };
+
+      const selectInspectionUser = async (user) => {
+        state.selectedUser = user;
+
+        renderInspectionUsers();
+
+        elements.selectedUserHeader.innerHTML = `
+          <div style="font-weight:900;font-size:15px;">
+            ${escapeHtml(user.fullname || user.domainname || "Unnamed User")}
+          </div>
+
+          <div style="margin-top:4px;font-size:12px;color:#64748b;">
+            ${escapeHtml(
+              user.internalemailaddress ||
+                user.domainname ||
+                user.systemuserid
+            )}
+          </div>
+        `;
+
+        await loadUserTeams();
+      };
+
+      const loadUserTeams = async () => {
+        if (!state.selectedUser?.systemuserid) return;
+
+        elements.userTeams.innerHTML =
+          createEmptyMessage("Loading user teams...");
+
+        try {
+          const userId = normalizeGuid(
+            state.selectedUser.systemuserid
+          );
+
+          const url =
+            `${clientUrl}/api/data/v9.2/systemusers(${userId})` +
+            `/teammembership_association` +
+            `?$select=teamid,name,teamtype,isdefault,description` +
+            `&$orderby=name asc`;
+
+          state.userTeams = await fetchAll(url);
+
+          renderUserTeams();
+        } catch (error) {
+          console.error("Loading user teams failed", error);
+
+          elements.userTeams.innerHTML =
+            createEmptyMessage("Failed loading user teams");
+
+          showStatus(
+            `Failed loading user teams: ${error.message || error}`,
+            "error"
+          );
+        }
+      };
+
+      const renderUserTeams = () => {
+        elements.userTeams.innerHTML = "";
+
+        if (!state.userTeams.length) {
+          elements.userTeams.innerHTML =
+            createEmptyMessage("This user has no team memberships");
+          return;
+        }
+
+        const title = document.createElement("div");
+        title.style.cssText = `
+          padding:7px 6px 11px;
+          color:#64748b;
+          font-size:12px;
+          font-weight:800;
+        `;
+
+        title.textContent = `${state.userTeams.length} team(s)`;
+
+        elements.userTeams.appendChild(title);
+
+        state.userTeams.forEach((team) => {
+          const row = document.createElement("div");
+
+          row.style.cssText = `
+            padding:12px;
+            margin-bottom:7px;
+            border:1px solid #e2e8f0;
+            border-radius:10px;
+            background:#ffffff;
+          `;
+
+          row.innerHTML = `
+            <div style="font-weight:850;">
+              ${escapeHtml(team.name || "Unnamed Team")}
+            </div>
+
+            <div style="
+              display:flex;
+              align-items:center;
+              gap:6px;
+              flex-wrap:wrap;
+              margin-top:6px;
+              font-size:11px;
+              color:#64748b;
+            ">
+              <span>${escapeHtml(getTeamTypeText(team.teamtype))}</span>
+
+              ${
+                team.isdefault
+                  ? `
+                    <span style="
+                      padding:2px 6px;
+                      border-radius:999px;
+                      background:#f1f5f9;
+                      color:#475569;
+                    ">
+                      Default
+                    </span>
+                  `
+                  : ""
+              }
+
+              ${
+                isManagedExternally(team)
+                  ? `
+                    <span style="
+                      padding:2px 6px;
+                      border-radius:999px;
+                      background:#fff7ed;
+                      color:#c2410c;
+                    ">
+                      Externally managed
+                    </span>
+                  `
+                  : ""
+              }
+            </div>
+
+            <div style="
+              margin-top:5px;
+              font-family:Consolas,Monaco,monospace;
+              font-size:10px;
+              color:#94a3b8;
+            ">
+              ${escapeHtml(team.teamid)}
+            </div>
+          `;
+
+          elements.userTeams.appendChild(row);
+        });
+      };
+
+      elements.close.onclick = () => overlay.remove();
+
+  
+
+    
+      elements.modeManageTeam.onclick = () =>
+        setMode("manage-team");
+
+      elements.modeUserTeams.onclick = () =>
+        setMode("user-teams");
+
+      elements.searchTeamButton.onclick = searchTeams;
+
+      elements.teamSearch.onkeydown = (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          searchTeams();
+        }
+      };
+
+      elements.searchUserButton.onclick = searchUsersForTeam;
+
+      elements.userSearch.onkeydown = (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          searchUsersForTeam();
+        }
+      };
+
+      elements.inspectUserSearchButton.onclick =
+        searchUsersForInspection;
+
+      elements.inspectUserSearch.onkeydown = (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          searchUsersForInspection();
+        }
+      };
+
+      setMode("manage-team");
+    }
+  });
+});
