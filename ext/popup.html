@@ -3,433 +3,224 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
     <title>Roi Valdman Extensions</title>
 
     <link rel="stylesheet" href="popup.css" />
 
-    <script
-      type="text/javascript"
-      src="ClientGlobalContext.js.aspx"
-    ></script>
+    <script type="text/javascript" src="ClientGlobalContext.js.aspx"></script>
+
+    <style>
+      .brand-logo,
+      .category-icon,
+      .tool-icon {
+        position: relative;
+        isolation: isolate;
+        overflow: hidden;
+      }
+
+      .brand-logo::before,
+      .category-icon::before,
+      .tool-icon::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -2;
+        background: linear-gradient(145deg, var(--icon-a), var(--icon-b));
+      }
+
+      .brand-logo::after,
+      .category-icon::after,
+      .tool-icon::after {
+        content: "";
+        position: absolute;
+        width: 70%;
+        height: 70%;
+        top: -32%;
+        right: -25%;
+        z-index: -1;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.22);
+        filter: blur(8px);
+      }
+
+      .brand-logo {
+        --icon-a: #2563eb;
+        --icon-b: #7c3aed;
+        width: 46px;
+        height: 46px;
+        flex: 0 0 46px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 13px;
+        color: #fff;
+        box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+      }
+
+      .brand-logo svg {
+        width: 27px;
+        height: 27px;
+      }
+
+      .app-header {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+      }
+
+      .category-icon,
+      .tool-icon {
+        color: #fff !important;
+        border-color: rgba(255, 255, 255, 0.2) !important;
+        box-shadow: 0 7px 16px color-mix(in srgb, var(--icon-a) 28%, transparent), inset 0 1px 0 rgba(255,255,255,.2) !important;
+      }
+
+      .category-icon svg {
+        width: 21px;
+        height: 21px;
+      }
+
+      .tool-icon svg {
+        width: 21px;
+        height: 21px;
+        stroke-width: 2;
+      }
+
+      .tool-card:hover .tool-icon {
+        transform: translateY(-1px) scale(1.08) rotate(-2deg);
+        border-color: rgba(255, 255, 255, 0.38) !important;
+        box-shadow: 0 10px 22px color-mix(in srgb, var(--icon-a) 40%, transparent), inset 0 1px 0 rgba(255,255,255,.3) !important;
+      }
+
+      .tool-card:hover .tool-icon::after {
+        transform: translate(-7px, 7px);
+      }
+
+      .tool-icon::after {
+        transition: transform 0.22s ease;
+      }
+
+      .tool-card {
+        --card-glow: color-mix(in srgb, var(--icon-a) 22%, transparent);
+      }
+
+      .tool-card:hover {
+        box-shadow: 0 14px 28px rgba(0, 0, 0, 0.32), 0 0 0 1px var(--card-glow), 0 0 22px var(--card-glow);
+      }
+
+      .tool-card::before {
+        background: linear-gradient(180deg, var(--icon-a), var(--icon-b)) !important;
+        box-shadow: 0 0 12px var(--icon-a);
+      }
+    </style>
   </head>
 
   <body>
+    <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+      <symbol id="i-brand" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 3h10a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4Zm2 5h6M8 12h8M9 16h6"/></symbol>
+      <symbol id="i-palette" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3a9 9 0 1 0 0 18h1.2a2.3 2.3 0 0 0 1.4-4.1 2 2 0 0 1 1.2-3.6H18A3 3 0 0 0 21 10a9 9 0 0 0-9-7Z"/><path fill="currentColor" d="M7.5 10.2a1.2 1.2 0 1 0 0-2.4 1.2 1.2 0 0 0 0 2.4Zm3-3a1.2 1.2 0 1 0 0-2.4 1.2 1.2 0 0 0 0 2.4Zm4 1a1.2 1.2 0 1 0 0-2.4 1.2 1.2 0 0 0 0 2.4Z"/></symbol>
+      <symbol id="i-hash" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M10 3 8 21M16 3l-2 18M4 9h16M3 15h16"/></symbol>
+      <symbol id="i-type" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 19 9 5h2l5 14M6 14h8M16 10h4v9M16 19h5"/></symbol>
+      <symbol id="i-tabs" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h5l2 3h9v9H4V6Zm0 5h16"/></symbol>
+      <symbol id="i-field" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5h16v14H4zM8 9h8M8 13h5"/></symbol>
+      <symbol id="i-edit" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m4 20 4.2-1 10.9-10.9a2.1 2.1 0 0 0-3-3L5.2 16 4 20Zm10.5-13.5 3 3"/></symbol>
+      <symbol id="i-view" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5h16v14H4zM4 9h16M8 13h8M8 16h5"/></symbol>
+      <symbol id="i-data" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+      <symbol id="i-builder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2" d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m13 2-8 12h7l-1 8 8-12h-7l1-8Z"/></symbol>
+      <symbol id="i-api" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9 4 12l4 3m8-6 4 3-4 3m-3-9-2 12"/></symbol>
+      <symbol id="i-guid" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="4" cy="18" r="1.5" fill="currentColor"/></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m8 9-4 3 4 3m8-6 4 3-4 3m-3-9-2 12"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="m15.5 15.5 5 5"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
+      <symbol id="i-keyvalue" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h10M4 12h7M4 17h10M18 5v14m-3-3 3 3 3-3"/></symbol>
+      <symbol id="i-open" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 4h6v6M20 4 11 13M20 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h6"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3 5 6v5c0 4.8 2.8 8.2 7 10 4.2-1.8 7-5.2 7-10V6l-7-3Z"/></symbol>
+      <symbol id="i-userplus" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M3 20c0-4 2.5-6 6-6s6 2 6 6m4-8v6m-3-3h6"/></symbol>
+      <symbol id="i-team" viewBox="0 0 24 24"><circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17" cy="9" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M2 20c0-4 2.5-6 6-6s6 2 6 6m1-5c3 0 5 1.7 5 5"/></symbol>
+      <symbol id="i-lockcheck" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10V7a4 4 0 0 1 8 0v3m-6 5 1.5 1.5L15 13"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m11 12 9-9m-3 3 3 3m-6 0 3 3"/></symbol>
+      <symbol id="i-bug" viewBox="0 0 24 24"><rect x="7" y="6" width="10" height="13" rx="5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M9 6V4m6 2V4M4 10h3m10 0h3M4 15h3m10 0h3M9 11h6M9 15h6"/></symbol>
+      <symbol id="i-inspect" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h16v12H4zM8 20h8M12 16v4m5-9-3-3-3 3"/></symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m12 2 1.7 5.3L19 9l-5.3 1.7L12 16l-1.7-5.3L5 9l5.3-1.7L12 2Zm7 13 .9 2.6L22 19l-2.1 1.4L19 23l-.9-2.6L16 19l2.1-1.4L19 15Z"/></symbol>
+      <symbol id="i-pipeline" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5h5v5H4zM15 5h5v5h-5zM9 7.5h6M12 7.5V17m-2.5 0h5m-4 0a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0Z"/></symbol>
+      <symbol id="i-trace" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3h14v18H5zM8 7h8M8 11h8M8 15h5"/></symbol>
+      <symbol id="i-share" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16V3m0 0L7 8m5-5 5 5M5 13v7h14v-7"/></symbol>
+      <symbol id="i-question" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M9.8 9a2.4 2.4 0 1 1 4.1 1.7c-1.2 1-1.9 1.4-1.9 3.3m0 3h.01"/></symbol>
+    </svg>
+
     <div class="app">
-  <header class="app-header">
-
-
-  <div class="brand-text">
-    <h1>Roi Valdman Extensions</h1>
-    <p>D365 / Dataverse Tools</p>
-  </div>
-</header>
+      <header class="app-header">
+        <div class="brand-logo"><svg><use href="#i-brand"></use></svg></div>
+        <div class="brand-text">
+          <h1>Roi Valdman Extensions</h1>
+          <p>D365 / Dataverse Tools</p>
+        </div>
+      </header>
 
       <main class="dashboard">
-        <!-- Metadata -->
         <section class="tool-category">
           <div class="category-header">
-            <div class="category-icon">◫</div>
-
-            <div>
-              <h2>Metadata & UI</h2>
-              <p>Forms, fields and interface tools</p>
-            </div>
+            <div class="category-icon" style="--icon-a:#3b82f6;--icon-b:#06b6d4"><svg><use href="#i-palette"></use></svg></div>
+            <div><h2>Metadata & UI</h2><p>Forms, fields and interface tools</p></div>
           </div>
-
           <div class="tools-grid">
-            <button
-              id="formBeautifier"
-              class="tool-card"
-              data-label="form beautifier logical names required dirty hidden disabled"
-            >
-              <span class="tool-icon">🎨</span>
-
-              <span class="tool-content">
-                <strong>Form Beautifier</strong>
-                <small>Display field states and logical names</small>
-              </span>
-            </button>
-
-            <button
-              id="findLogicalByLabel"
-              class="tool-card"
-              data-label="get logical name logical display metadata"
-            >
-              <span class="tool-icon">#</span>
-
-              <span class="tool-content">
-                <strong>Get Logical Name</strong>
-                <small>Find logical name by display label</small>
-              </span>
-            </button>
-
-            <button
-              id="findLabelByLogical"
-              class="tool-card"
-              data-label="get display name display logical metadata"
-            >
-              <span class="tool-icon">Aa</span>
-
-              <span class="tool-content">
-                <strong>Get Display Name</strong>
-                <small>Find display name by logical name</small>
-              </span>
-            </button>
-
-            <button
-              id="tabsname"
-              class="tool-card"
-              data-label="get tabs names tabs form ui"
-            >
-              <span class="tool-icon">☷</span>
-
-              <span class="tool-content">
-                <strong>Get Tabs Names</strong>
-                <small>Show all tabs on the current form</small>
-              </span>
-            </button>
-
-            <button
-              id="getFieldValue"
-              class="tool-card"
-              data-label="get field current record value"
-            >
-              <span class="tool-icon">◫</span>
-
-              <span class="tool-content">
-                <strong>Get Field Value</strong>
-                <small>Read field value from current record</small>
-              </span>
-            </button>
-
-            <button
-              id="showDirtyFields"
-              class="tool-card"
-              data-label="show dirty fields modified changed"
-            >
-              <span class="tool-icon">✎</span>
-
-              <span class="tool-content">
-                <strong>Show Dirty Fields</strong>
-                <small>Show fields changed on the form</small>
-              </span>
-            </button>
-
-            <button
-              id="openDefaultView"
-              class="tool-card"
-              data-label="open entity view default entity view"
-            >
-              <span class="tool-icon">☰</span>
-
-              <span class="tool-content">
-                <strong>Open Entity View</strong>
-                <small>Open the current entity view</small>
-              </span>
-            </button>
+            <button id="formBeautifier" class="tool-card" style="--icon-a:#ec4899;--icon-b:#8b5cf6" data-label="form beautifier logical names required dirty hidden disabled"><span class="tool-icon"><svg><use href="#i-palette"></use></svg></span><span class="tool-content"><strong>Form Beautifier</strong><small>Display field states and logical names</small></span></button>
+            <button id="findLogicalByLabel" class="tool-card" style="--icon-a:#3b82f6;--icon-b:#2563eb" data-label="get logical name logical display metadata"><span class="tool-icon"><svg><use href="#i-hash"></use></svg></span><span class="tool-content"><strong>Get Logical Name</strong><small>Find logical name by display label</small></span></button>
+            <button id="findLabelByLogical" class="tool-card" style="--icon-a:#8b5cf6;--icon-b:#6366f1" data-label="get display name display logical metadata"><span class="tool-icon"><svg><use href="#i-type"></use></svg></span><span class="tool-content"><strong>Get Display Name</strong><small>Find display name by logical name</small></span></button>
+            <button id="tabsname" class="tool-card" style="--icon-a:#06b6d4;--icon-b:#0891b2" data-label="get tabs names tabs form ui"><span class="tool-icon"><svg><use href="#i-tabs"></use></svg></span><span class="tool-content"><strong>Get Tabs Names</strong><small>Show all tabs on the current form</small></span></button>
+            <button id="getFieldValue" class="tool-card" style="--icon-a:#14b8a6;--icon-b:#0f766e" data-label="get field current record value"><span class="tool-icon"><svg><use href="#i-field"></use></svg></span><span class="tool-content"><strong>Get Field Value</strong><small>Read field value from current record</small></span></button>
+            <button id="showDirtyFields" class="tool-card" style="--icon-a:#f59e0b;--icon-b:#ea580c" data-label="show dirty fields modified changed"><span class="tool-icon"><svg><use href="#i-edit"></use></svg></span><span class="tool-content"><strong>Show Dirty Fields</strong><small>Show fields changed on the form</small></span></button>
+            <button id="openDefaultView" class="tool-card" style="--icon-a:#22c55e;--icon-b:#15803d" data-label="open entity view default entity view"><span class="tool-icon"><svg><use href="#i-view"></use></svg></span><span class="tool-content"><strong>Open Entity View</strong><small>Open the current entity view</small></span></button>
           </div>
         </section>
 
-        <!-- Data -->
         <section class="tool-category">
           <div class="category-header">
-            <div class="category-icon">⌘</div>
-
-            <div>
-              <h2>Data & Queries</h2>
-              <p>Records, FetchXML and Web API</p>
-            </div>
+            <div class="category-icon" style="--icon-a:#8b5cf6;--icon-b:#ec4899"><svg><use href="#i-data"></use></svg></div>
+            <div><h2>Data & Queries</h2><p>Records, FetchXML and Web API</p></div>
           </div>
-
           <div class="tools-grid">
-            <button
-              id="fetchBuilderUi"
-              class="tool-card 
-              data-label="fetch builder metadata fields conditions and or optionset"
-            >
-              <span class="tool-icon">🧱</span>
-
-              <span class="tool-content">
-                <strong>Fetch Builder</strong>
-                <small>Build FetchXML using a visual editor</small>
-              </span>
-            </button>
-
-            <button
-              id="quickUpdateFieldUi"
-              class="tool-card  
-              data-label="quick update field update record field value"
-            >
-              <span class="tool-icon">⚡</span>
-
-              <span class="tool-content">
-                <strong>Quick Update Field</strong>
-                <small>Update a record field quickly</small>
-              </span>
-            </button>
-
-            <button
-              id="apiTesterUi"
-              class="tool-card"
-              data-label="api tester custom action custom api web api execute request"
-            >
-              <span class="tool-icon">⚙</span>
-
-              <span class="tool-content">
-                <strong>API Tester</strong>
-                <small>Execute Web API and Custom API requests</small>
-              </span>
-            </button>
-
-            <button
-              id="retrieveByIdUi"
-              class="tool-card"
-              data-label="retrieve by guid retrieve by id guid"
-            >
-              <span class="tool-icon">⌘</span>
-
-              <span class="tool-content">
-                <strong>Retrieve By GUID</strong>
-                <small>Retrieve a record using its ID</small>
-              </span>
-            </button>
-
-            <button
-              id="retrieveMultiple"
-              class="tool-card"
-              data-label="retrieve multiple multiple query"
-            >
-              <span class="tool-icon">≣</span>
-
-              <span class="tool-content">
-                <strong>Retrieve Multiple</strong>
-                <small>Query multiple Dataverse records</small>
-              </span>
-            </button>
-
-            <button
-              id="fetchXmlUi"
-              class="tool-card"
-              data-label="fetchxml tester fetchxml"
-            >
-              <span class="tool-icon">&lt;/&gt;</span>
-
-              <span class="tool-content">
-                <strong>FetchXML Tester</strong>
-                <small>Execute and inspect FetchXML</small>
-              </span>
-            </button>
-
-            <button
-              id="openAdvancedFind"
-              class="tool-card"
-              data-label="advanced search advanced find"
-            >
-              <span class="tool-icon">⌕</span>
-
-              <span class="tool-content">
-                <strong>Advanced Search</strong>
-                <small>Open Dynamics advanced search</small>
-              </span>
-            </button>
-
-            <button
-              id="getSystemParam"
-              class="tool-card"
-              data-label="retrieve system params system params"
-            >
-              <span class="tool-icon">⚙</span>
-
-              <span class="tool-content">
-                <strong>Retrieve System Params</strong>
-                <small>Retrieve configured system parameters</small>
-              </span>
-            </button>
-
-            <button
-              id="searchSystemParams"
-              class="tool-card"
-              data-label="system params by value search value"
-            >
-              <span class="tool-icon">⌗</span>
-
-              <span class="tool-content">
-                <strong>System Params By Value</strong>
-                <small>Search parameters by configured value</small>
-              </span>
-            </button>
-
-            <button
-              id="openRecordByGuidUi"
-              class="tool-card  
-              data-label="open record by guid resolve guid entity"
-            >
-              <span class="tool-icon">🔎</span>
-
-              <span class="tool-content">
-                <strong>Open Record By GUID</strong>
-                <small>Resolve and open a Dataverse record</small>
-              </span>
-            </button>
+            <button id="fetchBuilderUi" class="tool-card" style="--icon-a:#7c3aed;--icon-b:#4f46e5" data-label="fetch builder metadata fields conditions and or optionset"><span class="tool-icon"><svg><use href="#i-builder"></use></svg></span><span class="tool-content"><strong>Fetch Builder</strong><small>Build FetchXML using a visual editor</small></span></button>
+            <button id="quickUpdateFieldUi" class="tool-card" style="--icon-a:#fbbf24;--icon-b:#f97316" data-label="quick update field update record field value"><span class="tool-icon"><svg><use href="#i-bolt"></use></svg></span><span class="tool-content"><strong>Quick Update Field</strong><small>Update a record field quickly</small></span></button>
+            <button id="apiTesterUi" class="tool-card" style="--icon-a:#0ea5e9;--icon-b:#2563eb" data-label="api tester custom action custom api web api execute request"><span class="tool-icon"><svg><use href="#i-api"></use></svg></span><span class="tool-content"><strong>API Tester</strong><small>Execute Web API and Custom API requests</small></span></button>
+            <button id="retrieveByIdUi" class="tool-card" style="--icon-a:#14b8a6;--icon-b:#0d9488" data-label="retrieve by guid retrieve by id guid"><span class="tool-icon"><svg><use href="#i-guid"></use></svg></span><span class="tool-content"><strong>Retrieve By GUID</strong><small>Retrieve a record using its ID</small></span></button>
+            <button id="retrieveMultiple" class="tool-card" style="--icon-a:#10b981;--icon-b:#16a34a" data-label="retrieve multiple multiple query"><span class="tool-icon"><svg><use href="#i-list"></use></svg></span><span class="tool-content"><strong>Retrieve Multiple</strong><small>Query multiple Dataverse records</small></span></button>
+            <button id="fetchXmlUi" class="tool-card" style="--icon-a:#6366f1;--icon-b:#4338ca" data-label="fetchxml tester fetchxml"><span class="tool-icon"><svg><use href="#i-code"></use></svg></span><span class="tool-content"><strong>FetchXML Tester</strong><small>Execute and inspect FetchXML</small></span></button>
+            <button id="openAdvancedFind" class="tool-card" style="--icon-a:#06b6d4;--icon-b:#0284c7" data-label="advanced search advanced find"><span class="tool-icon"><svg><use href="#i-search"></use></svg></span><span class="tool-content"><strong>Advanced Search</strong><small>Open Dynamics advanced search</small></span></button>
+            <button id="getSystemParam" class="tool-card" style="--icon-a:#64748b;--icon-b:#334155" data-label="retrieve system params system params"><span class="tool-icon"><svg><use href="#i-settings"></use></svg></span><span class="tool-content"><strong>Retrieve System Params</strong><small>Retrieve configured system parameters</small></span></button>
+            <button id="searchSystemParams" class="tool-card" style="--icon-a:#d946ef;--icon-b:#a21caf" data-label="system params by value search value"><span class="tool-icon"><svg><use href="#i-keyvalue"></use></svg></span><span class="tool-content"><strong>System Params By Value</strong><small>Search parameters by configured value</small></span></button>
+            <button id="openRecordByGuidUi" class="tool-card" style="--icon-a:#38bdf8;--icon-b:#2563eb" data-label="open record by guid resolve guid entity"><span class="tool-icon"><svg><use href="#i-open"></use></svg></span><span class="tool-content"><strong>Open Record By GUID</strong><small>Resolve and open a Dataverse record</small></span></button>
           </div>
         </section>
 
-        <!-- Security -->
         <section class="tool-category">
           <div class="category-header">
-            <div class="category-icon">🛡</div>
-
-            <div>
-              <h2>Security & Teams</h2>
-              <p>Roles, privileges and team membership</p>
-            </div>
+            <div class="category-icon" style="--icon-a:#22c55e;--icon-b:#14b8a6"><svg><use href="#i-shield"></use></svg></div>
+            <div><h2>Security & Teams</h2><p>Roles, privileges and team membership</p></div>
           </div>
-
           <div class="tools-grid">
-            <button
-              id="securityRolesUi"
-              class="tool-card  
-              data-label="assign security role assign role user"
-            >
-              <span class="tool-icon">＋</span>
-
-              <span class="tool-content">
-                <strong>Security Role</strong>
-                <small>Assign or remove roles from users</small>
-              </span>
-            </button>
-
-            <button
-              id="teamManagementUi"
-              class="tool-card  
-              data-label="team management teams users add remove membership"
-            >
-              <span class="tool-icon">👥</span>
-
-              <span class="tool-content">
-                <strong>Team Management</strong>
-                <small>Add and remove users from teams</small>
-              </span>
-            </button>
-
-            <button
-              id="getRolePermissions"
-              class="tool-card"
-              data-label="role permissions permissions security"
-            >
-              <span class="tool-icon">🛡</span>
-
-              <span class="tool-content">
-                <strong>Role Permissions</strong>
-                <small>View privileges assigned to a role</small>
-              </span>
-            </button>
-
-            <button
-              id="getSystemRolesByPrivilege"
-              class="tool-card"
-              data-label="roles by privilege privilege roles"
-            >
-              <span class="tool-icon">🔑</span>
-
-              <span class="tool-content">
-                <strong>Roles By Privilege</strong>
-                <small>Find roles containing a privilege</small>
-              </span>
-            </button>
+            <button id="securityRolesUi" class="tool-card" style="--icon-a:#22c55e;--icon-b:#16a34a" data-label="assign security role assign role user"><span class="tool-icon"><svg><use href="#i-userplus"></use></svg></span><span class="tool-content"><strong>Security Role</strong><small>Assign or remove roles from users</small></span></button>
+            <button id="teamManagementUi" class="tool-card" style="--icon-a:#06b6d4;--icon-b:#0f766e" data-label="team management teams users add remove membership"><span class="tool-icon"><svg><use href="#i-team"></use></svg></span><span class="tool-content"><strong>Team Management</strong><small>Add and remove users from teams</small></span></button>
+            <button id="getRolePermissions" class="tool-card" style="--icon-a:#10b981;--icon-b:#047857" data-label="role permissions permissions security"><span class="tool-icon"><svg><use href="#i-lockcheck"></use></svg></span><span class="tool-content"><strong>Role Permissions</strong><small>View privileges assigned to a role</small></span></button>
+            <button id="getSystemRolesByPrivilege" class="tool-card" style="--icon-a:#f59e0b;--icon-b:#d97706" data-label="roles by privilege privilege roles"><span class="tool-icon"><svg><use href="#i-key"></use></svg></span><span class="tool-content"><strong>Roles By Privilege</strong><small>Find roles containing a privilege</small></span></button>
           </div>
         </section>
 
-        <!-- Debug -->
         <section class="tool-category">
           <div class="category-header">
-            <div class="category-icon">🧩</div>
-
-            <div>
-              <h2>Debug & Utilities</h2>
-              <p>Diagnostics, ribbon and plugin tools</p>
-            </div>
+            <div class="category-icon" style="--icon-a:#f97316;--icon-b:#ef4444"><svg><use href="#i-bug"></use></svg></div>
+            <div><h2>Debug & Utilities</h2><p>Diagnostics, ribbon and plugin tools</p></div>
           </div>
-
           <div class="tools-grid">
-            <button
-              id="whyDidThisHappenUi"
-              class="tool-card  
-              data-label="why did this happen field debug recorder"
-            >
-              <span class="tool-icon">❓</span>
-
-              <span class="tool-content">
-                <strong>Why Did This Happen</strong>
-                <small>Track changes made to form fields</small>
-              </span>
-            </button>
-
-            <button
-              id="elementInspector"
-              class="tool-card"
-              data-label="ribbon enable rules js functions"
-            >
-              <span class="tool-icon">🎀</span>
-
-              <span class="tool-content">
-                <strong>Elements Deep Inspector</strong>
-                <small>Inspect ribbon and interface elements</small>
-              </span>
-            </button>
-
-            <button
-              id="ribbondebug"
-              class="tool-card"
-              data-label="add ribbon debug ribbon debug"
-            >
-              <span class="tool-icon">✦</span>
-
-              <span class="tool-content">
-                <strong>Add Ribbon Debug</strong>
-                <small>Enable ribbon debugging tools</small>
-              </span>
-            </button>
-
-            <button
-              id="pluginPipelineVisualizer"
-              class="tool-card"
-              data-label="plugin pipeline visualizer sdkmessageprocessingstep plugins steps"
-            >
-              <span class="tool-icon">🧩</span>
-
-              <span class="tool-content">
-                <strong>Plugin Pipeline</strong>
-                <small>Inspect registered plugin steps</small>
-              </span>
-            </button>
-
-            <button
-              id="pluginTraceExplorer"
-              class="tool-card"
-              data-label="plugin trace explorer plugintracelog errors exceptions"
-            >
-              <span class="tool-icon">🧾</span>
-
-              <span class="tool-content">
-                <strong>Plugin Trace Explorer</strong>
-                <small>View plugin errors and trace logs</small>
-              </span>
-            </button>
-
-            <button
-              id="shareExt"
-              class="tool-card tool-card-share"
-              data-label="share install extension share install"
-            >
-              <span class="tool-icon">⇪</span>
-
-              <span class="tool-content">
-                <strong>Share / Install</strong>
-                <small>Share or install the extension</small>
-              </span>
-            </button>
+            <button id="whyDidThisHappenUi" class="tool-card" style="--icon-a:#f59e0b;--icon-b:#ef4444" data-label="why did this happen field debug recorder"><span class="tool-icon"><svg><use href="#i-question"></use></svg></span><span class="tool-content"><strong>Why Did This Happen</strong><small>Track changes made to form fields</small></span></button>
+            <button id="elementInspector" class="tool-card" style="--icon-a:#ec4899;--icon-b:#8b5cf6" data-label="ribbon enable rules js functions"><span class="tool-icon"><svg><use href="#i-inspect"></use></svg></span><span class="tool-content"><strong>Elements Deep Inspector</strong><small>Inspect ribbon and interface elements</small></span></button>
+            <button id="ribbondebug" class="tool-card" style="--icon-a:#a855f7;--icon-b:#6366f1" data-label="add ribbon debug ribbon debug"><span class="tool-icon"><svg><use href="#i-spark"></use></svg></span><span class="tool-content"><strong>Add Ribbon Debug</strong><small>Enable ribbon debugging tools</small></span></button>
+            <button id="pluginPipelineVisualizer" class="tool-card" style="--icon-a:#0ea5e9;--icon-b:#4f46e5" data-label="plugin pipeline visualizer sdkmessageprocessingstep plugins steps"><span class="tool-icon"><svg><use href="#i-pipeline"></use></svg></span><span class="tool-content"><strong>Plugin Pipeline</strong><small>Inspect registered plugin steps</small></span></button>
+            <button id="pluginTraceExplorer" class="tool-card" style="--icon-a:#ef4444;--icon-b:#be123c" data-label="plugin trace explorer plugintracelog errors exceptions"><span class="tool-icon"><svg><use href="#i-trace"></use></svg></span><span class="tool-content"><strong>Plugin Trace Explorer</strong><small>View plugin errors and trace logs</small></span></button>
+            <button id="shareExt" class="tool-card tool-card-share" style="--icon-a:#14b8a6;--icon-b:#2563eb" data-label="share install extension share install"><span class="tool-icon"><svg><use href="#i-share"></use></svg></span><span class="tool-content"><strong>Share / Install</strong><small>Share or install the extension</small></span></button>
           </div>
         </section>
       </main>
