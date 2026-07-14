@@ -11692,3 +11692,1605 @@ document.getElementById("teamManagementUi")?.addEventListener("click", async () 
     }
   });
 });
+
+
+
+
+
+
+
+
+
+
+document
+  .getElementById("solutionLayersInspector")
+  .addEventListener("click", async () => {
+    const tab = await __d365GetActiveTab();
+    if (!tab?.id) return;
+
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      world: "MAIN",
+      func: async () => {
+        const MODAL_ID = "__d365_solution_layers_only";
+        document.getElementById(MODAL_ID)?.remove();
+
+        const clientUrl =
+          window.Xrm?.Utility?.getGlobalContext?.()?.getClientUrl?.();
+
+        if (!clientUrl) {
+          alert("D365 context not found.");
+          return;
+        }
+
+        const cleanGuid = value =>
+          String(value || "")
+            .replace(/[{}]/g, "")
+            .trim()
+            .toLowerCase();
+
+        const escapeOData = value =>
+          String(value || "").replace(/'/g, "''");
+
+        const getLabel = label =>
+          label?.UserLocalizedLabel?.Label ||
+          label?.LocalizedLabels?.[0]?.Label ||
+          "";
+
+        const formatted = (row, field) =>
+          row?.[`${field}@OData.Community.Display.V1.FormattedValue`] ??
+          row?.[field] ??
+          "";
+
+        const requestJson = async url => {
+          const response = await fetch(url, {
+            method: "GET",
+            credentials: "same-origin",
+            headers: {
+              Accept: "application/json",
+              "OData-Version": "4.0",
+              "OData-MaxVersion": "4.0",
+              Prefer:
+                'odata.include-annotations="OData.Community.Display.V1.FormattedValue",odata.maxpagesize=5000'
+            }
+          });
+
+          const text = await response.text();
+          let body;
+
+          try {
+            body = text ? JSON.parse(text) : null;
+          } catch {
+            body = text;
+          }
+
+          if (!response.ok) {
+            throw new Error(
+              body?.error?.message ||
+              `HTTP ${response.status} ${response.statusText}`
+            );
+          }
+
+          return body;
+        };
+
+        const apiGet = relativeUrl =>
+          requestJson(`${clientUrl}/api/data/v9.2/${relativeUrl}`);
+
+        const apiGetAll = async relativeUrl => {
+          const rows = [];
+          let nextUrl = relativeUrl.startsWith("http")
+            ? relativeUrl
+            : `${clientUrl}/api/data/v9.2/${relativeUrl}`;
+
+          while (nextUrl) {
+            const body = await requestJson(nextUrl);
+            rows.push(...(body?.value || []));
+            nextUrl = body?.["@odata.nextLink"] || null;
+          }
+
+          return rows;
+        };
+
+        const COMPONENT_FAMILIES = {
+          table: {
+            label: "Table & Table Components",
+            mode: "table"
+          },
+          webResource: {
+            label: "Web Resource / JavaScript / HTML / CSS",
+            mode: "entity",
+            entitySet: "webresourceset",
+            idField: "webresourceid",
+            nameFields: ["name", "displayname"],
+            select: [
+              "webresourceid",
+              "name",
+              "displayname",
+              "webresourcetype"
+            ]
+          },
+          pluginAssembly: {
+            label: "Plugin Assembly",
+            mode: "entity",
+            entitySet: "pluginassemblies",
+            idField: "pluginassemblyid",
+            nameFields: ["name"],
+            select: [
+              "pluginassemblyid",
+              "name",
+              "version",
+              "publickeytoken",
+              "isolationmode"
+            ]
+          },
+          pluginType: {
+            label: "Plugin Type",
+            mode: "entity",
+            entitySet: "plugintypes",
+            idField: "plugintypeid",
+            nameFields: ["typename", "friendlyname", "name"],
+            select: [
+              "plugintypeid",
+              "typename",
+              "friendlyname",
+              "name",
+              "assemblyname"
+            ]
+          },
+          pluginStep: {
+            label: "Plugin Step",
+            mode: "entity",
+            entitySet: "sdkmessageprocessingsteps",
+            idField: "sdkmessageprocessingstepid",
+            nameFields: ["name"],
+            select: [
+              "sdkmessageprocessingstepid",
+              "name",
+              "stage",
+              "mode",
+              "rank",
+              "statecode"
+            ]
+          },
+          workflow: {
+            label: "Workflow / Process / Action / Business Rule",
+            mode: "entity",
+            entitySet: "workflows",
+            idField: "workflowid",
+            nameFields: ["name", "uniquename"],
+            select: [
+              "workflowid",
+              "name",
+              "uniquename",
+              "category",
+              "primaryentity",
+              "statecode"
+            ]
+          },
+          customApi: {
+            label: "Custom API",
+            mode: "entity",
+            entitySet: "customapis",
+            idField: "customapiid",
+            nameFields: ["name", "uniquename"],
+            select: [
+              "customapiid",
+              "name",
+              "uniquename",
+              "bindingtype",
+              "boundentitylogicalname"
+            ]
+          },
+          modelDrivenApp: {
+            label: "Model-driven App",
+            mode: "entity",
+            entitySet: "appmodules",
+            idField: "appmoduleid",
+            nameFields: ["name", "uniquename"],
+            select: [
+              "appmoduleid",
+              "name",
+              "uniquename",
+              "statecode"
+            ]
+          },
+          siteMap: {
+            label: "Site Map",
+            mode: "entity",
+            entitySet: "sitemaps",
+            idField: "sitemapid",
+            nameFields: ["sitemapname", "sitemapnameunique"],
+            select: [
+              "sitemapid",
+              "sitemapname",
+              "sitemapnameunique"
+            ]
+          },
+          globalChoice: {
+            label: "Global Choice",
+            mode: "globalChoice"
+          },
+          environmentVariableDefinition: {
+            label: "Environment Variable Definition",
+            mode: "entity",
+            entitySet: "environmentvariabledefinitions",
+            idField: "environmentvariabledefinitionid",
+            nameFields: ["displayname", "schemaname"],
+            select: [
+              "environmentvariabledefinitionid",
+              "displayname",
+              "schemaname",
+              "type",
+              "statecode"
+            ]
+          },
+          environmentVariableValue: {
+            label: "Environment Variable Value",
+            mode: "entity",
+            entitySet: "environmentvariablevalues",
+            idField: "environmentvariablevalueid",
+            nameFields: ["value"],
+            select: [
+              "environmentvariablevalueid",
+              "value",
+              "_environmentvariabledefinitionid_value",
+              "statecode"
+            ]
+          },
+          securityRole: {
+            label: "Security Role",
+            mode: "entity",
+            entitySet: "roles",
+            idField: "roleid",
+            nameFields: ["name"],
+            select: ["roleid", "name", "statecode"]
+          },
+          emailTemplate: {
+            label: "Email Template",
+            mode: "entity",
+            entitySet: "templates",
+            idField: "templateid",
+            nameFields: ["title"],
+            select: [
+              "templateid",
+              "title",
+              "templatetypecode",
+              "ispersonal"
+            ]
+          }
+        };
+
+        const TABLE_COMPONENT_TYPES = {
+          table: "Table",
+          column: "Columns",
+          relationship: "Relationships",
+          form: "Forms",
+          view: "System Views",
+          chart: "System Charts",
+          key: "Alternate Keys",
+          localChoice: "Local Choices",
+          process: "Processes / Business Rules"
+        };
+
+        /*
+         * msdyn_componentlayers is a virtual table.
+         * It returns rows only when BOTH filters are supplied:
+         *   msdyn_componentid
+         *   msdyn_solutioncomponentname
+         *
+         * These names must match the Dataverse solution component names exactly.
+         */
+        const COMPONENT_TYPE_NAME_MAP = {
+          1: "Entity",
+          2: "Attribute",
+          3: "Relationship",
+          4: "AttributePicklistValue",
+          5: "AttributeLookupValue",
+          6: "ViewAttribute",
+          7: "LocalizedLabel",
+          9: "OptionSet",
+          10: "EntityRelationship",
+          13: "ManagedProperty",
+          14: "EntityKey",
+          16: "Privilege",
+          20: "Role",
+          21: "RolePrivilege",
+          22: "DisplayString",
+          24: "Form",
+          26: "SavedQuery",
+          29: "Workflow",
+          31: "Report",
+          36: "EmailTemplate",
+          44: "DuplicateRule",
+          47: "AttributeMap",
+          48: "RibbonCommand",
+          50: "RibbonCustomization",
+          55: "RibbonDiff",
+          59: "SavedQueryVisualization",
+          60: "SystemForm",
+          61: "WebResource",
+          62: "SiteMap",
+          63: "ConnectionRole",
+          66: "CustomControl",
+          70: "FieldSecurityProfile",
+          71: "FieldPermission",
+          80: "AppModule",
+          90: "PluginType",
+          91: "PluginAssembly",
+          92: "SDKMessageProcessingStep",
+          93: "SDKMessageProcessingStepImage",
+          95: "ServiceEndpoint",
+          300: "CanvasApp",
+          371: "Connector",
+          380: "EnvironmentVariableDefinition",
+          381: "EnvironmentVariableValue"
+        };
+
+
+        const overlay = document.createElement("div");
+        overlay.id = MODAL_ID;
+        overlay.style.cssText = `
+          position:fixed; inset:0; z-index:2147483647;
+          display:flex; align-items:center; justify-content:center;
+          padding:16px; background:rgba(15,23,42,.70);
+          backdrop-filter:blur(4px); direction:rtl;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+          width:min(1500px,97vw); height:min(900px,95vh);
+          display:flex; flex-direction:column; overflow:hidden;
+          background:#f8fafc; border:1px solid #cbd5e1;
+          border-radius:18px; box-shadow:0 30px 90px rgba(0,0,0,.42);
+          font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+        `;
+
+        const header = document.createElement("div");
+        header.style.cssText = `
+          display:flex; align-items:center; justify-content:space-between;
+          gap:12px; padding:15px 18px; color:#fff;
+          background:linear-gradient(135deg,#7c3aed,#2563eb);
+        `;
+        header.innerHTML = `
+          <div>
+            <div style="font-size:18px;font-weight:900">Solution Layers</div>
+            <div style="margin-top:3px;font-size:12px;opacity:.86">
+              Select any Dataverse component and view its layers only.
+            </div>
+          </div>
+        `;
+
+        const closeTop = document.createElement("button");
+        closeTop.textContent = "✕";
+        closeTop.style.cssText = `
+          width:38px; height:38px; border:1px solid rgba(255,255,255,.35);
+          border-radius:10px; color:#fff; background:rgba(255,255,255,.13);
+          cursor:pointer; font-size:16px; font-weight:900;
+        `;
+        header.appendChild(closeTop);
+
+        const content = document.createElement("div");
+        content.style.cssText = `
+          display:grid; grid-template-columns:minmax(380px,450px) minmax(0,1fr);
+          gap:14px; flex:1; min-height:0; padding:14px;
+        `;
+
+        const sidebar = document.createElement("div");
+        sidebar.style.cssText = `
+          display:flex; flex-direction:column; gap:12px; min-height:0;
+          padding:14px; overflow:auto; background:#fff;
+          border:1px solid #dbe3ef; border-radius:14px;
+        `;
+
+        const main = document.createElement("div");
+        main.style.cssText = `
+          display:flex; flex-direction:column; gap:12px;
+          min-width:0; min-height:0;
+        `;
+
+        const inputStyle = `
+          width:100%; box-sizing:border-box; padding:10px 11px;
+          color:#0f172a; background:#fff; border:1px solid #cbd5e1;
+          border-radius:10px; outline:none; font-size:13px;
+        `;
+
+        const makeField = (labelText, element) => {
+          const wrap = document.createElement("div");
+          wrap.style.cssText = "display:grid;gap:6px;";
+
+          const label = document.createElement("div");
+          label.textContent = labelText;
+          label.style.cssText =
+            "font-size:12px;font-weight:800;color:#334155;";
+
+          wrap.appendChild(label);
+          wrap.appendChild(element);
+          return wrap;
+        };
+
+        const familySelect = document.createElement("select");
+        familySelect.style.cssText = inputStyle;
+
+        Object.entries(COMPONENT_FAMILIES).forEach(([key, config]) => {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = config.label;
+          familySelect.appendChild(option);
+        });
+
+        const entitySearch = document.createElement("input");
+        entitySearch.placeholder =
+          "Search table by display/logical/schema name...";
+        entitySearch.style.cssText = inputStyle;
+
+        const entitySelect = document.createElement("select");
+        entitySelect.size = 7;
+        entitySelect.style.cssText = `${inputStyle} min-height:165px;`;
+
+        const tableComponentSelect = document.createElement("select");
+        tableComponentSelect.style.cssText = inputStyle;
+
+        Object.entries(TABLE_COMPONENT_TYPES).forEach(([key, label]) => {
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = label;
+          tableComponentSelect.appendChild(option);
+        });
+
+        const componentSearch = document.createElement("input");
+        componentSearch.placeholder = "Search existing components...";
+        componentSearch.style.cssText = inputStyle;
+
+        const componentSelect = document.createElement("select");
+        componentSelect.size = 13;
+        componentSelect.style.cssText = `
+          ${inputStyle}
+          min-height:300px; direction:ltr; text-align:left;
+          font-family:Consolas,Monaco,"Courier New",monospace;
+          line-height:1.55;
+        `;
+
+        const status = document.createElement("div");
+        status.style.cssText = `
+          min-height:22px; padding:9px 10px; color:#475569;
+          background:#f8fafc; border:1px solid #e2e8f0;
+          border-radius:10px; font-size:12px; line-height:1.45;
+        `;
+
+        const entitySearchField = makeField("2. Search Table", entitySearch);
+        const entityField = makeField("Available Tables", entitySelect);
+        const tableComponentField = makeField(
+          "3. Table Component Type",
+          tableComponentSelect
+        );
+
+        sidebar.appendChild(makeField("1. Component Type", familySelect));
+        sidebar.appendChild(entitySearchField);
+        sidebar.appendChild(entityField);
+        sidebar.appendChild(tableComponentField);
+        sidebar.appendChild(
+          makeField("Search Component", componentSearch)
+        );
+        sidebar.appendChild(
+          makeField("Available Components", componentSelect)
+        );
+        sidebar.appendChild(status);
+
+        const summary = document.createElement("div");
+        summary.style.cssText = `
+          padding:12px 14px; color:#334155; background:#fff;
+          border:1px solid #dbe3ef; border-radius:14px;
+          font-size:12px; line-height:1.6;
+        `;
+        summary.textContent = "Select a component.";
+
+        const resultWrap = document.createElement("div");
+        resultWrap.style.cssText = `
+          flex:1; min-height:0; overflow:auto; background:#fff;
+          border:1px solid #dbe3ef; border-radius:14px;
+        `;
+
+        const resultTable = document.createElement("table");
+        resultTable.style.cssText = `
+          width:100%; border-collapse:collapse; font-size:12px;
+          direction:ltr; text-align:left;
+        `;
+        resultWrap.appendChild(resultTable);
+
+        main.appendChild(summary);
+        main.appendChild(resultWrap);
+
+        content.appendChild(sidebar);
+        content.appendChild(main);
+
+        const footer = document.createElement("div");
+        footer.style.cssText = `
+          display:flex; justify-content:flex-end; padding:12px 14px;
+          background:#fff; border-top:1px solid #dbe3ef;
+        `;
+
+        const searchActiveLayersButton =
+          document.createElement("button");
+        searchActiveLayersButton.textContent =
+          "Search Active Layers";
+        searchActiveLayersButton.style.cssText = `
+          padding:10px 14px;
+          border:none;
+          border-radius:10px;
+          color:#fff;
+          background:#ea580c;
+          cursor:pointer;
+          font-weight:900;
+        `;
+
+        const closeButton = document.createElement("button");
+        closeButton.textContent = "Close";
+        closeButton.style.cssText = `
+          padding:10px 14px; border:1px solid #cbd5e1;
+          border-radius:10px; background:#fff; cursor:pointer;
+          font-weight:800;
+        `;
+
+        footer.appendChild(searchActiveLayersButton);
+        footer.appendChild(closeButton);
+
+        dialog.appendChild(header);
+        dialog.appendChild(content);
+        dialog.appendChild(footer);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        let allEntities = [];
+        let filteredEntities = [];
+        let allComponents = [];
+        let filteredComponents = [];
+        let selectedEntity = null;
+        let loadToken = 0;
+
+        const setStatus = (message, type = "normal") => {
+          const colors = {
+            normal: "#475569",
+            success: "#047857",
+            warning: "#b45309",
+            error: "#dc2626"
+          };
+          status.textContent = message;
+          status.style.color = colors[type] || colors.normal;
+        };
+
+        const renderSelect = (select, rows, textFactory, emptyText) => {
+          select.innerHTML = "";
+
+          if (!rows.length) {
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = emptyText;
+            select.appendChild(option);
+            return;
+          }
+
+          rows.forEach((row, index) => {
+            const option = document.createElement("option");
+            option.value = String(index);
+            option.textContent = textFactory(row);
+            select.appendChild(option);
+          });
+        };
+
+        const renderEntities = () => {
+          renderSelect(
+            entitySelect,
+            filteredEntities,
+            entity =>
+              `${entity.displayName || "(No display name)"} | ${entity.logicalName}`,
+            "No tables found"
+          );
+        };
+
+        const componentText = component =>
+          [component.displayName, component.name, component.extra]
+            .filter(Boolean)
+            .join(" | ");
+
+        const renderComponents = () => {
+          renderSelect(
+            componentSelect,
+            filteredComponents,
+            componentText,
+            "No components found"
+          );
+        };
+
+        const renderLayers = layers => {
+          resultTable.innerHTML = "";
+
+          const columns = [
+            ["order", "Order"],
+            ["solution", "Solution"],
+            ["publisher", "Publisher"],
+            ["componentType", "Component Type"],
+            ["layerName", "Layer Name"],
+            ["overwriteTime", "Overwrite Time"],
+            ["hasChanges", "Has Changes"]
+          ];
+
+          const thead = document.createElement("thead");
+          const headerRow = document.createElement("tr");
+
+          columns.forEach(([, label]) => {
+            const th = document.createElement("th");
+            th.textContent = label;
+            th.style.cssText = `
+              position:sticky; top:0; z-index:1; padding:10px 9px;
+              color:#fff; background:#0f172a;
+              border-bottom:1px solid #334155; white-space:nowrap;
+            `;
+            headerRow.appendChild(th);
+          });
+
+          thead.appendChild(headerRow);
+          resultTable.appendChild(thead);
+
+          const tbody = document.createElement("tbody");
+
+          if (!layers.length) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = columns.length;
+            td.textContent = "No layers found.";
+            td.style.cssText =
+              "padding:24px;text-align:center;color:#64748b;";
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+          } else {
+            layers.forEach((layer, index) => {
+              const tr = document.createElement("tr");
+              tr.style.background =
+                index % 2 === 0 ? "#fff" : "#f8fafc";
+
+              columns.forEach(([key]) => {
+                const td = document.createElement("td");
+                td.textContent = String(layer[key] ?? "");
+                td.title = td.textContent;
+                td.style.cssText = `
+                  padding:9px; color:#1e293b;
+                  border-bottom:1px solid #e2e8f0;
+                  white-space:nowrap; max-width:450px;
+                  overflow:hidden; text-overflow:ellipsis;
+                `;
+                tr.appendChild(td);
+              });
+
+              tbody.appendChild(tr);
+            });
+          }
+
+          resultTable.appendChild(tbody);
+        };
+
+
+        const isActiveLayer = layer => {
+          const values = [
+            layer?.solution,
+            layer?.layerName
+          ]
+            .filter(Boolean)
+            .map(value =>
+              String(value).trim().toLowerCase()
+            );
+
+          return values.some(value =>
+            value === "active" ||
+            value === "active layer" ||
+            value.includes("active")
+          );
+        };
+
+        const renderActiveLayerResults = rows => {
+          resultTable.innerHTML = "";
+
+          const columns = [
+            ["componentDisplay", "Component"],
+            ["componentName", "Logical / Unique Name"],
+            ["componentFamily", "Selected Type"],
+            ["order", "Order"],
+            ["solution", "Solution"],
+            ["publisher", "Publisher"],
+            ["componentType", "Layer Component Type"],
+            ["layerName", "Layer Name"],
+            ["overwriteTime", "Overwrite Time"]
+          ];
+
+          const thead = document.createElement("thead");
+          const headerRow = document.createElement("tr");
+
+          columns.forEach(([, label]) => {
+            const th = document.createElement("th");
+            th.textContent = label;
+            th.style.cssText = `
+              position:sticky;
+              top:0;
+              z-index:1;
+              padding:10px 9px;
+              color:#fff;
+              background:#9a3412;
+              border-bottom:1px solid #7c2d12;
+              white-space:nowrap;
+            `;
+            headerRow.appendChild(th);
+          });
+
+          thead.appendChild(headerRow);
+          resultTable.appendChild(thead);
+
+          const tbody = document.createElement("tbody");
+
+          if (!rows.length) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = columns.length;
+            td.textContent =
+              "No active layers found in the currently loaded components.";
+            td.style.cssText =
+              "padding:24px;text-align:center;color:#64748b;";
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+          } else {
+            rows.forEach((row, index) => {
+              const tr = document.createElement("tr");
+              tr.style.background =
+                index % 2 === 0 ? "#fff7ed" : "#ffedd5";
+
+              columns.forEach(([key]) => {
+                const td = document.createElement("td");
+                td.textContent = String(row[key] ?? "");
+                td.title = td.textContent;
+                td.style.cssText = `
+                  padding:9px;
+                  color:#431407;
+                  border-bottom:1px solid #fed7aa;
+                  white-space:nowrap;
+                  max-width:430px;
+                  overflow:hidden;
+                  text-overflow:ellipsis;
+                `;
+                tr.appendChild(td);
+              });
+
+              tbody.appendChild(tr);
+            });
+          }
+
+          resultTable.appendChild(tbody);
+        };
+
+        const mapWithConcurrency = async (
+          items,
+          concurrency,
+          worker
+        ) => {
+          const results = new Array(items.length);
+          let nextIndex = 0;
+
+          const runner = async () => {
+            while (true) {
+              const index = nextIndex++;
+              if (index >= items.length) return;
+
+              results[index] = await worker(
+                items[index],
+                index
+              );
+            }
+          };
+
+          await Promise.all(
+            Array.from(
+              {
+                length: Math.min(
+                  concurrency,
+                  Math.max(items.length, 1)
+                )
+              },
+              runner
+            )
+          );
+
+          return results;
+        };
+
+        const searchActiveLayers = async () => {
+          if (!allComponents.length) {
+            setStatus(
+              "⚠️ No components are loaded. Select a component type first.",
+              "warning"
+            );
+            return;
+          }
+
+          const token = ++loadToken;
+          const components = [...allComponents];
+          const family =
+            COMPONENT_FAMILIES[familySelect.value];
+
+          searchActiveLayersButton.disabled = true;
+          searchActiveLayersButton.textContent =
+            "Searching Active Layers...";
+
+          summary.innerHTML = `
+            <b>Active layer scan:</b>
+            ${components.length} loaded component(s)
+          `;
+
+          renderActiveLayerResults([]);
+
+          let completed = 0;
+          const activeRows = [];
+
+          try {
+            await mapWithConcurrency(
+              components,
+              4,
+              async component => {
+                if (token !== loadToken) return;
+
+                try {
+                  const layers =
+                    await getAllLayers(component);
+
+                  const activeLayers =
+                    layers.filter(isActiveLayer);
+
+                  activeLayers.forEach(layer => {
+                    activeRows.push({
+                      componentDisplay:
+                        component.displayName ||
+                        component.name ||
+                        component.id,
+                      componentName:
+                        component.name || "",
+                      componentFamily:
+                        familySelect.value === "table"
+                          ? TABLE_COMPONENT_TYPES[
+                              tableComponentSelect.value
+                            ]
+                          : family.label,
+                      ...layer
+                    });
+                  });
+                } catch (error) {
+                  console.warn(
+                    "Active layer scan failed for component:",
+                    component,
+                    error
+                  );
+                } finally {
+                  completed++;
+
+                  if (token === loadToken) {
+                    setStatus(
+                      `⏳ Scanned ${completed}/${components.length}; ` +
+                      `found ${activeRows.length} active layer(s)...`
+                    );
+                  }
+                }
+              }
+            );
+
+            if (token !== loadToken) return;
+
+            activeRows.sort((a, b) => {
+              const componentCompare =
+                String(a.componentDisplay || "")
+                  .localeCompare(
+                    String(b.componentDisplay || "")
+                  );
+
+              if (componentCompare !== 0) {
+                return componentCompare;
+              }
+
+              return (
+                Number(a.order ?? 0) -
+                Number(b.order ?? 0)
+              );
+            });
+
+            renderActiveLayerResults(activeRows);
+
+            summary.innerHTML = `
+              <b>Active layer scan:</b>
+              ${components.length} component(s)
+              &nbsp;&nbsp;|&nbsp;&nbsp;
+              <b>Active layers:</b>
+              ${activeRows.length}
+            `;
+
+            setStatus(
+              activeRows.length
+                ? `✅ Found ${activeRows.length} active layer(s).`
+                : "✅ Scan completed. No active layers were found.",
+              "success"
+            );
+
+            console.table(activeRows);
+          } finally {
+            searchActiveLayersButton.disabled = false;
+            searchActiveLayersButton.textContent =
+              "Search Active Layers";
+          }
+        };
+
+        const loadEntities = async () => {
+          const response = await apiGet(
+            "EntityDefinitions?" +
+            "$select=MetadataId,LogicalName,SchemaName,ObjectTypeCode,DisplayName"
+          );
+
+          allEntities = (response.value || [])
+            .filter(row => row.MetadataId && row.LogicalName)
+            .map(row => ({
+              id: cleanGuid(row.MetadataId),
+              logicalName: row.LogicalName,
+              schemaName: row.SchemaName || "",
+              objectTypeCode: row.ObjectTypeCode,
+              displayName: getLabel(row.DisplayName),
+              raw: row
+            }))
+            .sort((a, b) =>
+              (a.displayName || a.logicalName).localeCompare(
+                b.displayName || b.logicalName
+              )
+            );
+
+          filteredEntities = [...allEntities];
+          renderEntities();
+        };
+
+        const loadTableComponents = async () => {
+          if (!selectedEntity) return [];
+
+          const type = tableComponentSelect.value;
+          const logicalName = escapeOData(selectedEntity.logicalName);
+
+          if (type === "table") {
+            return [{
+              id: selectedEntity.id,
+              name: selectedEntity.logicalName,
+              displayName: selectedEntity.displayName,
+              extra: selectedEntity.schemaName,
+              raw: selectedEntity.raw
+            }];
+          }
+
+          if (type === "column" || type === "localChoice") {
+            const response = await apiGet(
+              `EntityDefinitions(LogicalName='${logicalName}')/Attributes?` +
+              "$select=MetadataId,LogicalName,SchemaName,DisplayName,AttributeType"
+            );
+
+            let rows = (response.value || [])
+              .filter(row => row.MetadataId)
+              .map(row => ({
+                id: cleanGuid(row.MetadataId),
+                name: row.LogicalName || "",
+                displayName: getLabel(row.DisplayName),
+                extra: row.SchemaName || row.AttributeType || "",
+                raw: row
+              }));
+
+            if (type === "localChoice") {
+              rows = rows.filter(row =>
+                ["Picklist", "State", "Status", "MultiSelectPicklist"]
+                  .includes(row.raw?.AttributeType)
+              );
+            }
+
+            return rows;
+          }
+
+          if (type === "relationship") {
+            const response = await apiGet(
+              `EntityDefinitions(LogicalName='${logicalName}')?` +
+              "$select=LogicalName" +
+              "&$expand=" +
+              "OneToManyRelationships($select=MetadataId,SchemaName,ReferencedEntity,ReferencingEntity)," +
+              "ManyToOneRelationships($select=MetadataId,SchemaName,ReferencedEntity,ReferencingEntity)," +
+              "ManyToManyRelationships($select=MetadataId,SchemaName,Entity1LogicalName,Entity2LogicalName)"
+            );
+
+            const rows = [
+              ...(response.OneToManyRelationships || []).map(row => ({
+                ...row,
+                relType: "1:N"
+              })),
+              ...(response.ManyToOneRelationships || []).map(row => ({
+                ...row,
+                relType: "N:1"
+              })),
+              ...(response.ManyToManyRelationships || []).map(row => ({
+                ...row,
+                relType: "N:N"
+              }))
+            ];
+
+            const unique = new Map();
+
+            rows.forEach(row => {
+              const id = cleanGuid(row.MetadataId);
+              if (!id || unique.has(id)) return;
+
+              const related = [
+                row.ReferencedEntity,
+                row.ReferencingEntity,
+                row.Entity1LogicalName,
+                row.Entity2LogicalName
+              ]
+                .filter(Boolean)
+                .filter((value, index, array) =>
+                  array.indexOf(value) === index
+                )
+                .join(" ↔ ");
+
+              unique.set(id, {
+                id,
+                name: row.SchemaName || "",
+                displayName: row.relType,
+                extra: related,
+                raw: row
+              });
+            });
+
+            return [...unique.values()];
+          }
+
+          if (type === "form") {
+            const response = await apiGet(
+              "systemforms?" +
+              "$select=formid,name,uniquename,type,formactivationstate,objecttypecode" +
+              `&$filter=objecttypecode eq '${logicalName}'` +
+              "&$orderby=name asc"
+            );
+
+            return (response.value || []).map(row => ({
+              id: cleanGuid(row.formid),
+              name: row.name || row.uniquename || "",
+              displayName: formatted(row, "type") || `Type ${row.type}`,
+              extra:
+                formatted(row, "formactivationstate") ||
+                String(row.formactivationstate ?? ""),
+              raw: row
+            }));
+          }
+
+          if (type === "view") {
+            const response = await apiGet(
+              "savedqueries?" +
+              "$select=savedqueryid,name,returnedtypecode,querytype,statecode" +
+              `&$filter=returnedtypecode eq '${logicalName}'` +
+              "&$orderby=name asc"
+            );
+
+            return (response.value || []).map(row => ({
+              id: cleanGuid(row.savedqueryid),
+              name: row.name || "",
+              displayName:
+                formatted(row, "querytype") ||
+                `Query Type ${row.querytype}`,
+              extra: row.statecode === 0 ? "Active" : "Inactive",
+              raw: row
+            }));
+          }
+
+          if (type === "chart") {
+            const response = await apiGet(
+              "savedqueryvisualizations?" +
+              "$select=savedqueryvisualizationid,name,primaryentitytypecode" +
+              `&$filter=primaryentitytypecode eq '${logicalName}'` +
+              "&$orderby=name asc"
+            );
+
+            return (response.value || []).map(row => ({
+              id: cleanGuid(row.savedqueryvisualizationid),
+              name: row.name || "",
+              displayName: "System Chart",
+              extra: "",
+              raw: row
+            }));
+          }
+
+          if (type === "key") {
+            const response = await apiGet(
+              `EntityDefinitions(LogicalName='${logicalName}')/Keys?` +
+              "$select=MetadataId,LogicalName,SchemaName,DisplayName,KeyAttributes"
+            );
+
+            return (response.value || []).map(row => ({
+              id: cleanGuid(row.MetadataId),
+              name: row.LogicalName || row.SchemaName || "",
+              displayName: getLabel(row.DisplayName),
+              extra: (row.KeyAttributes || []).join(", "),
+              raw: row
+            }));
+          }
+
+          if (type === "process") {
+            const response = await apiGet(
+              "workflows?" +
+              "$select=workflowid,name,uniquename,category,primaryentity,statecode" +
+              `&$filter=primaryentity eq '${logicalName}'` +
+              "&$orderby=name asc"
+            );
+
+            return (response.value || []).map(row => ({
+              id: cleanGuid(row.workflowid),
+              name: row.name || row.uniquename || "",
+              displayName:
+                formatted(row, "category") ||
+                `Category ${row.category}`,
+              extra: row.statecode === 1 ? "Active" : "Draft",
+              raw: row
+            }));
+          }
+
+          return [];
+        };
+
+        const loadGlobalComponents = async familyKey => {
+          const config = COMPONENT_FAMILIES[familyKey];
+
+          if (config.mode === "globalChoice") {
+            const response = await apiGet(
+              "GlobalOptionSetDefinitions?" +
+              "$select=MetadataId,Name,DisplayName"
+            );
+
+            return (response.value || []).map(row => ({
+              id: cleanGuid(row.MetadataId),
+              name: row.Name || "",
+              displayName: getLabel(row.DisplayName),
+              extra: "",
+              raw: row
+            }));
+          }
+
+          const rows = await apiGetAll(
+            `${config.entitySet}?$select=${config.select.join(",")}`
+          );
+
+          return rows
+            .filter(row => row[config.idField])
+            .map(row => ({
+              id: cleanGuid(row[config.idField]),
+              name:
+                config.nameFields
+                  .map(field => row[field])
+                  .find(Boolean) || "",
+              displayName:
+                config.nameFields
+                  .slice(1)
+                  .map(field => row[field])
+                  .find(Boolean) || "",
+              extra:
+                row.assemblyname ||
+                row.primaryentity ||
+                row.schemaname ||
+                formatted(row, "webresourcetype") ||
+                formatted(row, "category") ||
+                "",
+              raw: row
+            }));
+        };
+
+        const getSolutionComponents = async componentId => {
+          const id = cleanGuid(componentId);
+
+          if (!id) {
+            return [];
+          }
+
+          const result = await apiGetAll(
+            "solutioncomponents?" +
+            "$select=objectid,componenttype" +
+            `&$filter=objectid eq ${id}`
+          );
+
+          return result || [];
+        };
+
+        const getFallbackComponentTypes = component => {
+          const familyKey = familySelect.value;
+          const tableType = tableComponentSelect?.value;
+
+          const familyTypes = {
+            webResource: [61],
+            pluginAssembly: [91],
+            pluginType: [90],
+            pluginStep: [92],
+            workflow: [29],
+            customApi: [29],
+            modelDrivenApp: [80],
+            siteMap: [62],
+            globalChoice: [9],
+            environmentVariableDefinition: [380],
+            environmentVariableValue: [381],
+            securityRole: [20],
+            emailTemplate: [36]
+          };
+
+          if (familyKey !== "table") {
+            return familyTypes[familyKey] || [];
+          }
+
+          const tableTypes = {
+            table: [1],
+            column: [2],
+            relationship: [3, 10],
+            form: [60, 24],
+            view: [26],
+            chart: [59],
+            key: [14],
+            localChoice: [2, 9],
+            process: [29]
+          };
+
+          return tableTypes[tableType] || [];
+        };
+
+        const getAllLayers = async component => {
+          const componentId = cleanGuid(component?.id);
+
+          if (!componentId) {
+            throw new Error("Component ID is missing.");
+          }
+
+          /*
+           * The virtual table requires the real solution component type
+           * together with the object ID. Query solutioncomponent first.
+           */
+          const solutionComponents =
+            await getSolutionComponents(componentId);
+
+          const typeCodes = new Set(
+            solutionComponents
+              .map(item => Number(item.componenttype))
+              .filter(Number.isFinite)
+          );
+
+          /*
+           * Some metadata subcomponents don't have a direct row in every
+           * solution. Use the selected UI type only as a fallback.
+           */
+          if (!typeCodes.size) {
+            getFallbackComponentTypes(component)
+              .forEach(code => typeCodes.add(code));
+          }
+
+          const queries = [];
+          const rows = [];
+
+          for (const typeCode of typeCodes) {
+            const typeName =
+              COMPONENT_TYPE_NAME_MAP[typeCode];
+
+            if (!typeName) {
+              queries.push({
+                objectId: componentId,
+                componentType: typeCode,
+                skipped: true,
+                reason: "No component type name mapping"
+              });
+              continue;
+            }
+
+            const filter =
+              `msdyn_solutioncomponentname eq '${escapeOData(typeName)}'` +
+              " and " +
+              `msdyn_componentid eq '${escapeOData(componentId)}'`;
+
+            try {
+              const result = await apiGetAll(
+                "msdyn_componentlayers?" +
+                "$select=" +
+                [
+                  "msdyn_componentlayerid",
+                  "msdyn_componentid",
+                  "msdyn_name",
+                  "msdyn_order",
+                  "msdyn_solutionname",
+                  "msdyn_publishername",
+                  "msdyn_solutioncomponentname",
+                  "msdyn_overwritetime",
+                  "msdyn_changes"
+                ].join(",") +
+                `&$filter=${encodeURIComponent(filter)}` +
+                "&$orderby=msdyn_order asc"
+              );
+
+              queries.push({
+                objectId: componentId,
+                componentType: typeCode,
+                componentTypeName: typeName,
+                found: result.length
+              });
+
+              rows.push(...result);
+            } catch (error) {
+              queries.push({
+                objectId: componentId,
+                componentType: typeCode,
+                componentTypeName: typeName,
+                found: 0,
+                error: error?.message || String(error)
+              });
+            }
+          }
+
+          const unique = new Map();
+
+          rows.forEach(row => {
+            const layerId =
+              cleanGuid(row.msdyn_componentlayerid);
+
+            const key =
+              layerId ||
+              [
+                row.msdyn_componentid,
+                row.msdyn_solutioncomponentname,
+                row.msdyn_solutionname,
+                row.msdyn_order,
+                row.msdyn_overwritetime
+              ].join("|");
+
+            if (!unique.has(key)) {
+              unique.set(key, {
+                order: row.msdyn_order,
+                solution:
+                  row.msdyn_solutionname || "",
+                publisher:
+                  row.msdyn_publishername || "",
+                componentType:
+                  row.msdyn_solutioncomponentname || "",
+                layerName:
+                  row.msdyn_name || "",
+                overwriteTime:
+                  row.msdyn_overwritetime || "",
+                hasChanges:
+                  Boolean(row.msdyn_changes),
+                componentId:
+                  row.msdyn_componentid || "",
+                layerId
+              });
+            }
+          });
+
+          const layers = [...unique.values()]
+            .sort((a, b) => {
+              const orderDifference =
+                Number(a.order ?? 0) -
+                Number(b.order ?? 0);
+
+              if (orderDifference !== 0) {
+                return orderDifference;
+              }
+
+              return String(a.overwriteTime || "")
+                .localeCompare(
+                  String(b.overwriteTime || "")
+                );
+            });
+
+          console.log("Exact solution layer lookup:", {
+            selectedComponent: component,
+            solutionComponents,
+            typeCodes: [...typeCodes],
+            queries,
+            layers
+          });
+
+          return layers;
+        };
+
+        const inspectComponent = async component => {
+          const token = ++loadToken;
+
+          setStatus(
+            `⏳ Loading layers for ${
+              component.displayName || component.name || component.id
+            }...`
+          );
+
+          try {
+            const layers = await getAllLayers(component);
+            if (token !== loadToken) return;
+
+            summary.innerHTML = `
+              <b>Component:</b>
+              ${component.displayName || component.name || "-"}
+              &nbsp;&nbsp;|&nbsp;&nbsp;
+              <b>GUID:</b>
+              <span dir="ltr">${component.id}</span>
+              &nbsp;&nbsp;|&nbsp;&nbsp;
+              <b>Layers:</b> ${layers.length}
+            `;
+
+            renderLayers(layers);
+
+            setStatus(
+              layers.length
+                ? `✅ Found ${layers.length} layer(s).`
+                : "⚠️ No layers found for this component.",
+              layers.length ? "success" : "warning"
+            );
+
+            console.table(layers);
+          } catch (error) {
+            console.error(error);
+            renderLayers([]);
+            setStatus(`❌ ${error.message || error}`, "error");
+          }
+        };
+
+        const refreshComponents = async () => {
+          const token = ++loadToken;
+          const familyKey = familySelect.value;
+          const family = COMPONENT_FAMILIES[familyKey];
+
+          componentSearch.value = "";
+          componentSelect.disabled = true;
+          componentSelect.innerHTML = "<option>Loading...</option>";
+          renderLayers([]);
+          summary.textContent = "Select a component.";
+
+          try {
+            if (family.mode === "table") {
+              if (!selectedEntity) {
+                allComponents = [];
+                filteredComponents = [];
+                renderComponents();
+                setStatus("Choose a table.", "warning");
+                return;
+              }
+
+              allComponents = await loadTableComponents();
+            } else {
+              allComponents = await loadGlobalComponents(familyKey);
+            }
+
+            if (token !== loadToken) return;
+
+            allComponents.sort((a, b) =>
+              componentText(a).localeCompare(componentText(b))
+            );
+
+            filteredComponents = [...allComponents];
+            renderComponents();
+            componentSelect.disabled = false;
+
+            setStatus(
+              `✅ Loaded ${allComponents.length} component(s).`,
+              "success"
+            );
+
+            if (allComponents.length === 1) {
+              componentSelect.selectedIndex = 0;
+              await inspectComponent(allComponents[0]);
+            }
+          } catch (error) {
+            if (token !== loadToken) return;
+
+            console.error(error);
+            allComponents = [];
+            filteredComponents = [];
+            renderComponents();
+            setStatus(`❌ ${error.message || error}`, "error");
+          }
+        };
+
+        const updateMode = async () => {
+          const tableMode =
+            COMPONENT_FAMILIES[familySelect.value].mode === "table";
+
+          entitySearchField.style.display = tableMode ? "grid" : "none";
+          entityField.style.display = tableMode ? "grid" : "none";
+          tableComponentField.style.display = tableMode ? "grid" : "none";
+
+          await refreshComponents();
+        };
+
+        const close = () => overlay.remove();
+        closeTop.onclick = close;
+        closeButton.onclick = close;
+
+        familySelect.addEventListener("change", updateMode);
+
+        entitySearch.addEventListener("input", () => {
+          const search = entitySearch.value.trim().toLowerCase();
+
+          filteredEntities = !search
+            ? [...allEntities]
+            : allEntities.filter(entity =>
+                [
+                  entity.displayName,
+                  entity.logicalName,
+                  entity.schemaName
+                ]
+                  .filter(Boolean)
+                  .some(value =>
+                    value.toLowerCase().includes(search)
+                  )
+              );
+
+          renderEntities();
+        });
+
+        entitySelect.addEventListener("change", async () => {
+          selectedEntity =
+            filteredEntities[Number(entitySelect.value)] || null;
+
+          if (!selectedEntity) return;
+
+          entitySearch.value =
+            selectedEntity.displayName || selectedEntity.logicalName;
+
+          await refreshComponents();
+        });
+
+        tableComponentSelect.addEventListener(
+          "change",
+          refreshComponents
+        );
+
+        componentSearch.addEventListener("input", () => {
+          const search = componentSearch.value.trim().toLowerCase();
+
+          filteredComponents = !search
+            ? [...allComponents]
+            : allComponents.filter(component =>
+                [
+                  component.displayName,
+                  component.name,
+                  component.extra,
+                  component.id
+                ]
+                  .filter(Boolean)
+                  .some(value =>
+                    String(value).toLowerCase().includes(search)
+                  )
+              );
+
+          renderComponents();
+          renderLayers([]);
+          summary.textContent = "Select a component.";
+        });
+
+        componentSelect.addEventListener("change", async () => {
+          const component =
+            filteredComponents[Number(componentSelect.value)] || null;
+
+          if (component) {
+            await inspectComponent(component);
+          }
+        });
+
+        searchActiveLayersButton.addEventListener(
+          "click",
+          searchActiveLayers
+        );
+
+        renderLayers([]);
+
+        try {
+          setStatus("⏳ Loading tables...");
+          await loadEntities();
+          await updateMode();
+        } catch (error) {
+          console.error(error);
+          setStatus(`❌ ${error.message || error}`, "error");
+        }
+      }
+    });
+  });
+
+

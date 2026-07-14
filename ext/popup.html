@@ -146,6 +146,7 @@
       <symbol id="i-inspect" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h16v12H4zM8 20h8M12 16v4m5-9-3-3-3 3"/></symbol>
       <symbol id="i-spark" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m12 2 1.7 5.3L19 9l-5.3 1.7L12 16l-1.7-5.3L5 9l5.3-1.7L12 2Zm7 13 .9 2.6L22 19l-2.1 1.4L19 23l-.9-2.6L16 19l2.1-1.4L19 15Z"/></symbol>
       <symbol id="i-pipeline" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5h5v5H4zM15 5h5v5h-5zM9 7.5h6M12 7.5V17m-2.5 0h5m-4 0a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0Z"/></symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m12 3-9 5 9 5 9-5-9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
       <symbol id="i-trace" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3h14v18H5zM8 7h8M8 11h8M8 15h5"/></symbol>
       <symbol id="i-share" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16V3m0 0L7 8m5-5 5 5M5 13v7h14v-7"/></symbol>
       <symbol id="i-question" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M9.8 9a2.4 2.4 0 1 1 4.1 1.7c-1.2 1-1.9 1.4-1.9 3.3m0 3h.01"/></symbol>
@@ -219,7 +220,21 @@
             <button id="elementInspector" class="tool-card" style="--icon-a:#ec4899;--icon-b:#8b5cf6" data-label="ribbon enable rules js functions"><span class="tool-icon"><svg><use href="#i-inspect"></use></svg></span><span class="tool-content"><strong>Elements Deep Inspector</strong><small>Inspect ribbon and interface elements</small></span></button>
             <button id="ribbondebug" class="tool-card" style="--icon-a:#a855f7;--icon-b:#6366f1" data-label="add ribbon debug ribbon debug"><span class="tool-icon"><svg><use href="#i-spark"></use></svg></span><span class="tool-content"><strong>Add Ribbon Debug</strong><small>Enable ribbon debugging tools</small></span></button>
             <button id="pluginPipelineVisualizer" class="tool-card" style="--icon-a:#0ea5e9;--icon-b:#4f46e5" data-label="plugin pipeline visualizer sdkmessageprocessingstep plugins steps"><span class="tool-icon"><svg><use href="#i-pipeline"></use></svg></span><span class="tool-content"><strong>Plugin Pipeline</strong><small>Inspect registered plugin steps</small></span></button>
-            <button id="pluginTraceExplorer" class="tool-card" style="--icon-a:#ef4444;--icon-b:#be123c" data-label="plugin trace explorer plugintracelog errors exceptions"><span class="tool-icon"><svg><use href="#i-trace"></use></svg></span><span class="tool-content"><strong>Plugin Trace Explorer</strong><small>View plugin errors and trace logs</small></span></button>
+<button
+  id="solutionLayersInspector"
+  class="tool-card"
+  style="--icon-a:#f59e0b;--icon-b:#7c3aed"
+  data-label="solution layers component layers solutions"
+>
+  <span class="tool-icon">
+    <svg><use href="#i-layers"></use></svg>
+  </span>
+
+  <span class="tool-content">
+    <strong>Solution Layers</strong>
+    <small>Inspect component solution layers</small>
+  </span>
+</button>            <button id="pluginTraceExplorer" class="tool-card" style="--icon-a:#ef4444;--icon-b:#be123c" data-label="plugin trace explorer plugintracelog errors exceptions"><span class="tool-icon"><svg><use href="#i-trace"></use></svg></span><span class="tool-content"><strong>Plugin Trace Explorer</strong><small>View plugin errors and trace logs</small></span></button>
             <button id="shareExt" class="tool-card tool-card-share" style="--icon-a:#14b8a6;--icon-b:#2563eb" data-label="share install extension share install"><span class="tool-icon"><svg><use href="#i-share"></use></svg></span><span class="tool-content"><strong>Share / Install</strong><small>Share or install the extension</small></span></button>
           </div>
         </section>
