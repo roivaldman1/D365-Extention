@@ -577,353 +577,1172 @@ document.getElementById("retrieveByIdUi").addEventListener("click", async () => 
 // popup.js  (RetrieveMultiple UI button - FULL CODE)
 // Requires a button in popup.html: <button id="retrieveMultipleUi">RetrieveMultiple</button>
 
-document.getElementById("retrieveMultiple").addEventListener("click", async () => {
-  const tab = await __d365GetActiveTab();
-  if (!tab?.id) return;
+document
+  .getElementById("retrieveMultiple")
+  .addEventListener("click", async () => {
+    const tab = await __d365GetActiveTab();
+    if (!tab?.id) return;
 
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: false },
-    world: "MAIN",
-    func: () => {
-      // ---------- helpers ----------
-      const normalizeFilter = (f) => {
-        if (!f) return "";
-        f = f.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
-        f = f.replace(/"([^"]*)"/g, "'$1'");
-        return f.trim();
-      };
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      world: "MAIN",
+      func: async () => {
+        const MODAL_ID = "__rv_advanced_retrieve_multiple";
+        document.getElementById(MODAL_ID)?.remove();
 
-      const safeString = (v) => {
-        if (v == null) return "";
-        if (typeof v === "string") return v;
-        if (typeof v === "number" || typeof v === "boolean") return String(v);
-        try { return JSON.stringify(v); } catch (e) { return String(v); }
-      };
+        const clientUrl =
+          window.Xrm?.Utility?.getGlobalContext?.()?.getClientUrl?.();
 
-      const getShownVal = (row, key) => {
-        const fv = row?.[`${key}@OData.Community.Display.V1.FormattedValue`];
-        const v = (fv != null) ? fv : row?.[key];
-        return v;
-      };
-
-      const escapePipes = (s) => String(s ?? "").replace(/\|/g, "\\|");
-
-      // Parses the "Columns" input:
-      // - allows plain: col1,col2,col3
-      // - allows advanced: col1,col2&$expand=nav($select=name)&$orderby=createdon desc
-      const parseColumnsAndExtra = (input) => {
-        const raw = (input || "").trim();
-        if (!raw) return { cols: [], extraParts: [] };
-
-        // Split on first '&' (keep the rest as extra query)
-        const ampIndex = raw.indexOf("&");
-        let colsPart = raw;
-        let extra = "";
-
-        if (ampIndex !== -1) {
-          colsPart = raw.slice(0, ampIndex).trim();
-          extra = raw.slice(ampIndex + 1).trim(); // everything after &
-        }
-
-        const cols = colsPart
-          .split(",")
-          .map(s => s.trim())
-          .filter(Boolean);
-
-        const extraParts = extra
-          ? extra.split("&").map(s => s.trim()).filter(Boolean)
-          : [];
-
-        return { cols, extraParts };
-      };
-
-      // ---------- modal ----------
-      document.getElementById("__d365helper_modal")?.remove();
-
-      const overlay = document.createElement("div");
-      overlay.id = "__d365helper_modal";
-      overlay.style.cssText = `
-        position: fixed; inset: 0; background: rgba(0,0,0,.35);
-        z-index: 2147483647; display: flex; align-items: center; justify-content: center; padding: 16px;
-      `;
-
-      const box = document.createElement("div");
-      box.style.cssText = `
-        width: min(980px, 96vw); background: #fff; border-radius: 14px;
-        box-shadow: 0 18px 50px rgba(0,0,0,.35); overflow: hidden;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      `;
-
-      const header = document.createElement("div");
-      header.style.cssText = `padding: 12px 14px; font-weight: 800; border-bottom: 1px solid #e5e7eb;`;
-      header.textContent = "D365 RetrieveMultiple (WebApi)";
-
-      const body = document.createElement("div");
-      body.style.cssText = `padding: 12px 14px; display: grid; gap: 10px;`;
-
-      const inputStyle = `
-        width: 100%;
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        padding: 10px;
-        font-size: 13px;
-        box-sizing: border-box;
-      `;
-
-      const mkRow = (label, el) => {
-        const wrap = document.createElement("div");
-        wrap.style.cssText = `display:grid; gap:6px;`;
-        const l = document.createElement("div");
-        l.textContent = label;
-        l.style.cssText = `font-size: 12px; font-weight: 700; color: #111827;`;
-        wrap.appendChild(l);
-        wrap.appendChild(el);
-        return wrap;
-      };
-
-      const entityInput = document.createElement("input");
-      entityInput.placeholder = "Entity logical name (e.g. contact)";
-      entityInput.style.cssText = inputStyle;
-
-      const selectInput = document.createElement("input");
-      selectInput.placeholder =
-        "Columns (comma). You can also append: & $expand=... & $orderby=...  (example: col1,col2&$expand=nav($select=name))";
-      selectInput.style.cssText = inputStyle;
-
-      const filterInput = document.createElement("input");
-      filterInput.placeholder = "Filter (without $filter=) e.g. statecode eq 0 and contains(fullname,'Roi')";
-      filterInput.style.cssText = inputStyle;
-
-      const topInput = document.createElement("input");
-      topInput.placeholder = "Top (optional) e.g. 25";
-      topInput.style.cssText = inputStyle;
-
-      const status = document.createElement("div");
-      status.style.cssText = `font-size: 12px; color: #374151;`;
-
-      const resultTa = document.createElement("textarea");
-      resultTa.readOnly = true;
-      resultTa.placeholder = "Results will appear here…";
-      resultTa.style.cssText = `
-        width: 100%;
-        height: 360px;
-        resize: vertical;
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        padding: 10px;
-        font-size: 12px;
-        line-height: 1.4;
-        white-space: pre;
-        box-sizing: border-box;
-        font-family: Consolas, Monaco, "Courier New", monospace;
-        direction: ltr;
-        text-align: left;
-      `;
-
-      body.appendChild(mkRow("Entity", entityInput));
-      body.appendChild(mkRow("Columns (+ optional & $expand=...)", selectInput));
-      body.appendChild(mkRow("Filter (optional)", filterInput));
-      body.appendChild(mkRow("Top (optional)", topInput));
-      body.appendChild(status);
-      body.appendChild(resultTa);
-
-      const footer = document.createElement("div");
-      footer.style.cssText = `
-        display: flex; gap: 10px; justify-content: flex-end;
-        padding: 12px 14px; border-top: 1px solid #e5e7eb;
-      `;
-
-      const btn = (text) => {
-        const b = document.createElement("button");
-        b.textContent = text;
-        b.style.cssText = `
-          border: 1px solid #cbd5e1;
-          padding: 10px 14px;
-          border-radius: 10px;
-          cursor: pointer;
-          background: #fff;
-          font-weight: 800;
-        `;
-        return b;
-      };
-
-      const btnClose = btn("Close");
-
-      const btnCopy = btn("Copy");
-      btnCopy.style.border = "none";
-      btnCopy.style.background = "#2563eb";
-      btnCopy.style.color = "#fff";
-
-      const btnRun = btn("Run");
-      btnRun.style.border = "none";
-      btnRun.style.background = "#111827";
-      btnRun.style.color = "#fff";
-
-      const close = () => overlay.remove();
-      btnClose.onclick = close;
-      
-
-      btnCopy.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(resultTa.value || "");
-          btnCopy.textContent = "Copied ✅";
-          setTimeout(() => (btnCopy.textContent = "Copy"), 900);
-        } catch (e) {
-          resultTa.focus(); resultTa.select(); document.execCommand("copy");
-          btnCopy.textContent = "Copied ✅";
-          setTimeout(() => (btnCopy.textContent = "Copy"), 900);
-        }
-      };
-
-      btnRun.onclick = async () => {
-        const entity = (entityInput.value || "").trim();
-        const filter = normalizeFilter(filterInput.value || "");
-        const topStr = (topInput.value || "").trim();
-
-        status.textContent = "";
-        resultTa.value = "";
-
-        if (!entity) { status.textContent = "❌ Entity is required."; return; }
-
-        const { cols, extraParts } = parseColumnsAndExtra(selectInput.value || "");
-
-        const top = topStr ? parseInt(topStr, 10) : null;
-        if (topStr && (!Number.isFinite(top) || top <= 0)) {
-          status.textContent = "❌ Top must be a positive number.";
+        if (!clientUrl) {
+          alert("D365 context not found.");
           return;
         }
 
-        const Xrm = window.Xrm;
-        const webApi = Xrm?.WebApi || Xrm?.WebApi?.online;
-        if (!webApi?.retrieveMultipleRecords) {
-          status.textContent = "❌ Xrm.WebApi.retrieveMultipleRecords not available.";
-          return;
-        }
+        const API = `${clientUrl}/api/data/v9.2`;
+        const PAGE_SIZE = 100;
 
-        // build query string (supports $expand and any extra $... parts)
-        const params = [];
-        if (cols.length > 0) params.push(`$select=${encodeURIComponent(cols.join(","))}`);
-        if (filter) params.push(`$filter=${encodeURIComponent(filter)}`);
-        if (top) params.push(`$top=${encodeURIComponent(String(top))}`);
+        const html = (value) =>
+          String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
 
-        // Append extra parts like: $expand=... or $orderby=... or $select=...
-        // NOTE: keep it generic, but safe (encode key+value)
-        for (const p of extraParts) {
-          const part = p.replace(/^\?/, "").trim();
-          if (!part) continue;
+        const labelOf = (label) =>
+          label?.UserLocalizedLabel?.Label ||
+          label?.LocalizedLabels?.[0]?.Label ||
+          "";
 
-          // Allow "$expand=..." (most common)
-          const eqIdx = part.indexOf("=");
-          if (eqIdx === -1) {
-            params.push(encodeURIComponent(part));
-            continue;
+        const requestJson = async (url) => {
+          const response = await fetch(url, {
+            method: "GET",
+            credentials: "same-origin",
+            headers: {
+              Accept: "application/json",
+              "OData-Version": "4.0",
+              "OData-MaxVersion": "4.0",
+              Prefer:
+                `odata.include-annotations="OData.Community.Display.V1.FormattedValue,Microsoft.Dynamics.CRM.lookuplogicalname",odata.maxpagesize=${PAGE_SIZE}`
+            }
+          });
+
+          const text = await response.text();
+          let body = null;
+          try {
+            body = text ? JSON.parse(text) : null;
+          } catch {
+            body = text;
           }
 
-          const key = part.slice(0, eqIdx).trim();
-          const val = part.slice(eqIdx + 1).trim();
-          if (!key) continue;
+          if (!response.ok) {
+            throw new Error(
+              body?.error?.message ||
+                `HTTP ${response.status} ${response.statusText}`
+            );
+          }
 
-          params.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
-        }
+          return body;
+        };
 
-        const query = params.length ? `?${params.join("&")}` : "";
+        const apiGet = (relativeUrl) =>
+          requestJson(relativeUrl.startsWith("http") ? relativeUrl : `${API}/${relativeUrl}`);
 
-        status.textContent = "⏳ Running…";
+        const style = document.createElement("style");
+        style.textContent = `
+          #${MODAL_ID} * { box-sizing:border-box; }
+          #${MODAL_ID} {
+            position:fixed; inset:0; z-index:2147483647;
+            padding:12px; direction:rtl;
+            background:rgba(241,245,249,.96);
+            backdrop-filter:blur(3px);
+            font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif;
+          }
+          #${MODAL_ID} .arm-dialog {
+            width:calc(100vw - 24px); height:calc(100vh - 24px);
+            display:flex; flex-direction:column; overflow:hidden;
+            color:#111827; background:#f8fafc;
+            border:1px solid #cbd5e1; border-radius:18px;
+            box-shadow:0 24px 70px rgba(15,23,42,.16);
+          }
+          #${MODAL_ID} .arm-header {
+            display:flex; align-items:center; justify-content:space-between;
+            gap:16px; padding:18px 22px;
+            background:#ffffff;
+            border-bottom:1px solid #e2e8f0;
+          }
+          #${MODAL_ID} .arm-title { color:#0f172a; font-size:30px; font-weight:950; line-height:1.1; }
+          #${MODAL_ID} .arm-subtitle { margin-top:5px; color:#64748b; font-size:13px; }
+          #${MODAL_ID} .arm-close {
+            width:42px; height:42px; border-radius:12px; cursor:pointer;
+            color:#0f172a; background:#ffffff; border:1px solid #cbd5e1;
+            font-size:18px; font-weight:900;
+          }
+          #${MODAL_ID} .arm-close:hover { background:#f8fafc; }
+          #${MODAL_ID} .arm-body {
+            flex:1; min-height:0; overflow:auto;
+            display:flex; flex-direction:column;
+            gap:14px; padding:14px;
+            background:#f8fafc;
+          }
+          #${MODAL_ID} .arm-search-panel,
+          #${MODAL_ID} .arm-results-panel {
+            width:100%; background:#ffffff;
+            border:1px solid #d7dee8; border-radius:16px;
+            box-shadow:0 8px 24px rgba(15,23,42,.04);
+          }
+          #${MODAL_ID} .arm-search-panel {
+            padding:16px;
+            display:flex; flex-direction:column; gap:14px;
+          }
+          #${MODAL_ID} .arm-results-panel {
+            flex:1; min-height:360px;
+            padding:14px;
+            display:flex; flex-direction:column; gap:10px;
+          }
+          #${MODAL_ID} .arm-builder-head {
+            display:flex; align-items:flex-start; justify-content:space-between;
+            gap:12px; flex-wrap:wrap;
+            padding-bottom:2px;
+          }
+          #${MODAL_ID} .arm-builder-title { color:#111827; font-size:18px; font-weight:950; }
+          #${MODAL_ID} .arm-builder-desc { margin-top:3px; color:#64748b; font-size:12px; }
+          #${MODAL_ID} .arm-builder-meta {
+            display:flex; gap:8px; flex-wrap:wrap;
+          }
+          #${MODAL_ID} .arm-pill {
+            display:inline-flex; align-items:center; justify-content:center;
+            min-height:30px; padding:6px 10px;
+            color:#334155; background:#f8fafc;
+            border:1px solid #d7dee8; border-radius:999px;
+            font-size:11px; font-weight:800;
+          }
+          #${MODAL_ID} .arm-top-grid {
+            display:grid; grid-template-columns:minmax(320px,1.1fr) minmax(340px,1.25fr) minmax(280px,.9fr);
+            gap:14px; align-items:stretch;
+          }
+          #${MODAL_ID} .arm-block {
+            min-width:0; padding:14px;
+            background:#f8fafc; border:1px solid #e2e8f0; border-radius:14px;
+          }
+          #${MODAL_ID} .arm-block-title {
+            display:flex; align-items:center; justify-content:space-between;
+            gap:10px; margin-bottom:10px;
+            color:#0f172a; font-size:14px; font-weight:950;
+          }
+          #${MODAL_ID} .arm-block-subtitle {
+            margin-top:4px; color:#64748b; font-size:11px; font-weight:600;
+          }
+          #${MODAL_ID} .arm-fields-help {
+            margin-top:6px; color:#64748b; font-size:11px; line-height:1.5;
+          }
+          #${MODAL_ID} .arm-compact-grid {
+            display:grid; grid-template-columns:1fr 1fr; gap:10px;
+          }
+          #${MODAL_ID} .arm-condition-section {
+            padding:14px; background:#f8fafc;
+            border:1px solid #e2e8f0; border-radius:14px;
+          }
+          #${MODAL_ID} .arm-actions-bar {
+            display:flex; align-items:center; justify-content:space-between;
+            gap:12px; flex-wrap:wrap;
+            padding:12px 14px;
+            background:#0f172a; border-radius:14px;
+          }
+          #${MODAL_ID} .arm-status-wrap { display:flex; flex-direction:column; gap:4px; }
+          #${MODAL_ID} .arm-status-label { color:#cbd5e1; font-size:11px; font-weight:800; }
+          #${MODAL_ID} .arm-status { color:#ffffff; font-size:13px; font-weight:700; }
+          #${MODAL_ID} #armCount { color:#0f172a; font-size:13px; font-weight:800; }
+          #${MODAL_ID} .arm-query-wrap {
+            display:grid; gap:8px;
+            padding:14px; background:#f8fafc;
+            border:1px solid #e2e8f0; border-radius:14px;
+          }
+          #${MODAL_ID} .arm-query-title {
+            color:#0f172a; font-size:13px; font-weight:900;
+          }
+          #${MODAL_ID} label {
+            display:grid; gap:6px; color:#334155; font-size:11px; font-weight:850;
+          }
+          #${MODAL_ID} input, #${MODAL_ID} select, #${MODAL_ID} textarea {
+            width:100%; min-width:0; padding:10px 11px;
+            color:#111827; background:#ffffff; border:1px solid #b8c3d1;
+            border-radius:10px; outline:none; font-size:12px;
+          }
+          #${MODAL_ID} input::placeholder, #${MODAL_ID} textarea::placeholder { color:#94a3b8; }
+          #${MODAL_ID} input:focus, #${MODAL_ID} select:focus, #${MODAL_ID} textarea:focus {
+            border-color:#0f172a; box-shadow:0 0 0 2px rgba(15,23,42,.08);
+          }
+          #${MODAL_ID} select[multiple] {
+            min-height:220px; max-height:320px; padding:5px;
+          }
+          #${MODAL_ID} select[multiple] option { padding:7px 9px; border-radius:6px; }
+          #${MODAL_ID} select[multiple] option:checked {
+            color:#ffffff; background:#111827 linear-gradient(0deg,#111827,#111827);
+          }
+          #${MODAL_ID} .arm-actions { display:flex; flex-wrap:wrap; gap:8px; }
+          #${MODAL_ID} button.arm-btn {
+            padding:9px 13px; border-radius:10px; cursor:pointer;
+            color:#111827; background:#ffffff; border:1px solid #b8c3d1;
+            font-size:12px; font-weight:900;
+          }
+          #${MODAL_ID} button.arm-btn:hover { background:#f8fafc; border-color:#64748b; }
+          #${MODAL_ID} button.arm-primary { color:#ffffff; background:#111827; border-color:#111827; }
+          #${MODAL_ID} button.arm-primary:hover { color:#ffffff; background:#000000; }
+          #${MODAL_ID} button.arm-primary-soft { color:#111827; background:#ffffff; border-color:#ffffff; }
+          #${MODAL_ID} button.arm-danger { color:#b91c1c; background:#ffffff; border-color:#fecaca; }
+          #${MODAL_ID} button:disabled { opacity:.45; cursor:not-allowed; }
+          #${MODAL_ID} .arm-condition {
+            display:grid;
+            grid-template-columns:100px minmax(320px,2.2fr) 170px minmax(220px,1.4fr) 42px;
+            gap:10px; align-items:end; margin-top:10px; padding:12px;
+            background:#ffffff; border:1px solid #d7dee8; border-radius:12px;
+          }
+          #${MODAL_ID} .arm-condition:first-child { margin-top:0; }
+          #${MODAL_ID} .arm-condition-value,
+          #${MODAL_ID} .arm-condition-value input,
+          #${MODAL_ID} .arm-condition-value select {
+            width:100%; max-width:none;
+          }
+          #${MODAL_ID} .arm-remove {
+            width:42px; height:40px; padding:0; border-radius:10px; cursor:pointer;
+            color:#b91c1c; background:#ffffff; border:1px solid #fecaca;
+            font-weight:950;
+          }
+          #${MODAL_ID} .arm-query {
+            direction:ltr; text-align:left; min-height:78px; max-height:160px; resize:vertical;
+            font-family:Consolas,Monaco,monospace; color:#111827; background:#ffffff;
+          }
+          #${MODAL_ID} .arm-results-head {
+            display:flex; align-items:center; justify-content:space-between;
+            gap:10px; flex-wrap:wrap;
+          }
+          #${MODAL_ID} .arm-results-title { color:#0f172a; font-size:16px; font-weight:950; }
+          #${MODAL_ID} .arm-results-subtitle { margin-top:3px; color:#64748b; font-size:12px; }
+          #${MODAL_ID} .arm-results-toolbar {
+            display:flex; align-items:center; justify-content:space-between;
+            gap:10px; flex-wrap:wrap;
+            padding:12px 14px; background:#f8fafc;
+            border:1px solid #e2e8f0; border-radius:12px;
+          }
+          #${MODAL_ID} .arm-results {
+            flex:1; min-height:420px; overflow:auto; background:#ffffff;
+            border:1px solid #d7dee8; border-radius:12px;
+          }
+          #${MODAL_ID} table {
+            width:max-content; min-width:100%; border-collapse:collapse;
+            direction:ltr; text-align:left; font-size:12px;
+          }
+          #${MODAL_ID} th {
+            position:sticky; top:0; z-index:2; padding:10px 9px;
+            color:#ffffff; background:#111827; border-bottom:1px solid #111827;
+            white-space:nowrap;
+          }
+          #${MODAL_ID} td {
+            max-width:420px; padding:9px 10px; color:#111827;
+            background:#ffffff; border-bottom:1px solid #e2e8f0;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+          }
+          #${MODAL_ID} tr:nth-child(even) td { background:#f8fafc; }
+          #${MODAL_ID} tr:hover td { background:#eef2f7; }
+          #${MODAL_ID} .arm-link { color:#0f172a; text-decoration:underline; font-weight:850; }
+          #${MODAL_ID} .arm-empty { padding:42px; color:#64748b; text-align:center; }
+          #${MODAL_ID} .arm-badge {
+            display:inline-flex; padding:4px 8px; border-radius:999px;
+            color:#ffffff; background:#111827; border:1px solid #111827;
+            font-size:10px; font-weight:900;
+          }
+          #${MODAL_ID} * { scrollbar-color:#94a3b8 #f1f5f9; }
+          #${MODAL_ID} ::-webkit-scrollbar { width:10px; height:10px; }
+          #${MODAL_ID} ::-webkit-scrollbar-track { background:#f1f5f9; }
+          #${MODAL_ID} ::-webkit-scrollbar-thumb { background:#94a3b8; border:2px solid #f1f5f9; border-radius:10px; }
+          #${MODAL_ID} ::-webkit-scrollbar-thumb:hover { background:#64748b; }
+          @media (max-width:1400px) {
+            #${MODAL_ID} .arm-top-grid { grid-template-columns:1fr 1fr; }
+            #${MODAL_ID} .arm-top-grid > :last-child { grid-column:1 / -1; }
+          }
+          @media (max-width:1100px) {
+            #${MODAL_ID} .arm-top-grid,
+            #${MODAL_ID} .arm-compact-grid { grid-template-columns:1fr 1fr; }
+            #${MODAL_ID} .arm-condition {
+              grid-template-columns:90px minmax(220px,1.6fr) 150px minmax(180px,1.1fr) 42px;
+            }
+          }
+          @media (max-width:760px) {
+            #${MODAL_ID} { padding:0; }
+            #${MODAL_ID} .arm-dialog { width:100vw; height:100vh; border-radius:0; }
+            #${MODAL_ID} .arm-top-grid,
+            #${MODAL_ID} .arm-compact-grid,
+            #${MODAL_ID} .arm-condition { grid-template-columns:1fr; }
+            #${MODAL_ID} .arm-remove { width:100%; }
+          }
+        `;
+        document.head.appendChild(style);
 
-        try {
-          const res = await webApi.retrieveMultipleRecords(entity, query);
-          const rows = res?.entities || [];
+        const overlay = document.createElement("div");
+        overlay.id = MODAL_ID;
+        overlay.innerHTML = `
+          <div class="arm-dialog">
+            <div class="arm-header">
+              <div>
+                <div class="arm-title">Advanced Retrieve Multiple</div>
+                <div class="arm-subtitle">Metadata-driven Dataverse search builder</div>
+              </div>
+              <button class="arm-close" id="armCloseTop">✕</button>
+            </div>
 
-          const lines = [];
-          lines.push(`Entity: ${entity}`);
-          lines.push(`Query: ${query || "(none)"}  (no $select => ALL columns)`);
-          lines.push(`Returned: ${rows.length}`);
-          lines.push("");
+            <div class="arm-body">
+              <section class="arm-search-panel">
+                <div class="arm-builder-head">
+                  <div>
+                    <div class="arm-builder-title">Search builder</div>
+                    <div class="arm-builder-desc">Everything related to the search is concentrated here: select a table, choose columns, add filters, then run the query.</div>
+                  </div>
+                  <div class="arm-builder-meta">
+                    <span class="arm-pill">Step 1: Table</span>
+                    <span class="arm-pill">Step 2: Columns</span>
+                    <span class="arm-pill">Step 3: Conditions</span>
+                    <span class="arm-pill">Step 4: Run</span>
+                  </div>
+                </div>
 
-          if (!rows.length) {
-            lines.push("(no rows)");
-            resultTa.value = lines.join("\n");
-            status.textContent = "✅ Done (0 rows).";
+                <div class="arm-top-grid">
+                  <div class="arm-block">
+                    <div class="arm-block-title">1. Table selection</div>
+                    <div class="arm-block-subtitle">First choose the Dataverse table you want to search.</div>
+                    <label style="margin-top:10px">Search table
+                      <input id="armEntitySearch" placeholder="Display name / logical name" />
+                    </label>
+                    <label style="margin-top:10px">Select table
+                      <select id="armEntitySelect" size="8"></select>
+                    </label>
+                  </div>
+
+                  <div class="arm-block">
+                    <div class="arm-block-title">2. Columns to return</div>
+                    <div class="arm-block-subtitle">You can load and return many columns at once.</div>
+                    <label style="margin-top:10px">Search column
+                      <input id="armFieldSearch" placeholder="Display name / logical name" disabled />
+                    </label>
+                    <label style="margin-top:10px">Select columns to display
+                      <select id="armColumns" multiple size="12" disabled></select>
+                    </label>
+                    <div class="arm-fields-help">
+                      Search and select columns one by one. Selected columns stay loaded even when the search text changes.
+                    </div>
+                    <div id="armSelectedColumnsSummary" style="margin-top:8px;padding:9px 10px;background:#ffffff;border:1px solid #d7dee8;border-radius:10px;color:#334155;font-size:11px;font-weight:800">
+                      0 columns selected
+                    </div>
+                    <div class="arm-actions" style="margin-top:10px">
+                      <button class="arm-btn" id="armSelectRecommended">Recommended</button>
+                      <button class="arm-btn" id="armClearColumns">Clear</button>
+                    </div>
+                  </div>
+
+                  <div class="arm-block">
+                    <div class="arm-block-title">3. Sort, status and page size</div>
+                    <div class="arm-block-subtitle">Optional settings that affect the query results.</div>
+                    <div class="arm-compact-grid" style="margin-top:10px">
+                      <label>Order by
+                        <select id="armOrderField" disabled></select>
+                      </label>
+                      <label>Direction
+                        <select id="armOrderDirection">
+                          <option value="asc">Ascending</option>
+                          <option value="desc">Descending</option>
+                        </select>
+                      </label>
+                      <label>Rows per page
+                        <select id="armTop">
+                          <option>25</option><option selected>100</option><option>250</option><option>500</option>
+                        </select>
+                      </label>
+                      <label>Include inactive
+                        <select id="armIncludeInactive">
+                          <option value="yes">Yes</option>
+                          <option value="no">No, statecode = 0</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="arm-condition-section">
+                  <div class="arm-block-title">4. Search conditions</div>
+                  <div class="arm-block-subtitle">Add one or more filters and combine them with AND / OR.</div>
+                  <div id="armConditions" style="margin-top:10px"></div>
+                  <div class="arm-actions" style="margin-top:10px">
+                    <button class="arm-btn" id="armAddCondition" disabled>+ Add condition</button>
+                  </div>
+                </div>
+
+                <div class="arm-actions-bar">
+                  <div class="arm-status-wrap">
+                    <div class="arm-status-label">Current status</div>
+                    <div class="arm-status" id="armStatus">Loading table metadata...</div>
+                  </div>
+                  <div class="arm-actions">
+                    <button class="arm-btn arm-primary-soft" id="armCopyQuery">Copy query</button>
+                    <button class="arm-btn arm-primary" id="armRun" disabled>Run search</button>
+                  </div>
+                </div>
+
+                <div class="arm-query-wrap">
+                  <div class="arm-query-title">Generated Web API query</div>
+                  <textarea class="arm-query" id="armQuery" readonly></textarea>
+                </div>
+              </section>
+
+              <section class="arm-results-panel">
+                <div class="arm-results-head">
+                  <div>
+                    <div class="arm-results-title">Results</div>
+                    <div class="arm-results-subtitle">The table below shows the retrieved Dataverse records.</div>
+                  </div>
+                  <span class="arm-badge" id="armResultBadge">0 rows</span>
+                </div>
+                <div class="arm-results-toolbar">
+                  <div class="arm-status" id="armCount">0 rows</div>
+                  <div class="arm-actions">
+                    <button class="arm-btn" id="armPrev" disabled>Previous</button>
+                    <button class="arm-btn" id="armNext" disabled>Next page</button>
+                  </div>
+                </div>
+                <div class="arm-results" id="armResults">
+                  <div class="arm-empty">Choose a table and build your search.</div>
+                </div>
+              </section>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const $ = (id) => overlay.querySelector(`#${id}`);
+        const entitySearch = $("armEntitySearch");
+        const entitySelect = $("armEntitySelect");
+        const fieldSearch = $("armFieldSearch");
+        const columnsSelect = $("armColumns");
+        const selectedColumnsSummary = $("armSelectedColumnsSummary");
+        const conditionsWrap = $("armConditions");
+        const addConditionBtn = $("armAddCondition");
+        const orderField = $("armOrderField");
+        const orderDirection = $("armOrderDirection");
+        const topSelect = $("armTop");
+        const includeInactive = $("armIncludeInactive");
+        const queryBox = $("armQuery");
+        const resultsWrap = $("armResults");
+        const status = $("armStatus");
+        const count = $("armCount");
+        const resultBadge = $("armResultBadge");
+        const runBtn = $("armRun");
+        const nextBtn = $("armNext");
+        const prevBtn = $("armPrev");
+
+        let allEntities = [];
+        let filteredEntities = [];
+        let selectedEntity = null;
+        let allFields = [];
+        let filteredFields = [];
+        let nextLink = null;
+        let history = [];
+        let currentPageUrl = null;
+        let currentRows = [];
+        let loadToken = 0;
+        const optionCache = new Map();
+        const selectedColumnNames = new Set();
+
+        const setStatus = (message, type = "normal") => {
+          const colors = {
+            normal: "#ffffff",
+            success: "#bbf7d0",
+            warning: "#fde68a",
+            error: "#fecaca"
+          };
+          status.textContent = message;
+          status.style.color = colors[type] || colors.normal;
+        };
+
+        const setCountText = (text) => {
+          count.textContent = text;
+          if (resultBadge) resultBadge.textContent = text;
+        };
+
+        const entityText = (entity) =>
+          `${entity.displayName || "(No display name)"} | ${entity.logicalName}`;
+
+        const fieldText = (field) =>
+          `${field.displayName || "(No display name)"} | ${field.logicalName} [${field.type}]`;
+
+        const renderEntities = () => {
+          entitySelect.innerHTML = "";
+          filteredEntities.forEach((entity, index) => {
+            const option = document.createElement("option");
+            option.value = String(index);
+            option.textContent = entityText(entity);
+            entitySelect.appendChild(option);
+          });
+        };
+
+        const updateSelectedColumnsSummary = () => {
+          const selected = allFields
+            .filter((field) => selectedColumnNames.has(field.logicalName))
+            .map((field) => field.displayName || field.logicalName);
+
+          if (!selected.length) {
+            selectedColumnsSummary.textContent = "0 columns selected";
+            selectedColumnsSummary.title = "";
             return;
           }
 
-          // Columns to show:
-          // - if user chose columns => show them
-          // - else show keys from first row (up to 25)
-          const shownCols = (cols.length > 0)
-            ? cols
-            : Object.keys(rows[0]).filter(k => !k.startsWith("@")).slice(0, 25);
+          const preview = selected.slice(0, 5).join(", ");
+          const more = selected.length > 5 ? ` +${selected.length - 5} more` : "";
+          selectedColumnsSummary.textContent = `${selected.length} columns selected: ${preview}${more}`;
+          selectedColumnsSummary.title = selected.join("\n");
+        };
 
-          // Pretty table with dynamic widths (better reading)
-          const colWidths = shownCols.map((c) => {
-            const headerW = c.length;
-            const maxCell = Math.max(
-              ...rows.slice(0, 200).map(r => safeString(getShownVal(r, c)).length)
+        const syncVisibleColumnSelections = () => {
+          [...columnsSelect.options].forEach((option) => {
+            if (option.selected) {
+              selectedColumnNames.add(option.value);
+            } else {
+              selectedColumnNames.delete(option.value);
+            }
+          });
+          updateSelectedColumnsSummary();
+        };
+
+        const renderFields = () => {
+          columnsSelect.innerHTML = "";
+          filteredFields.forEach((field) => {
+            const option = document.createElement("option");
+            option.value = field.logicalName;
+            option.textContent = fieldText(field);
+            option.selected = selectedColumnNames.has(field.logicalName);
+            columnsSelect.appendChild(option);
+          });
+          updateSelectedColumnsSummary();
+        };
+
+        const renderOrderFields = () => {
+          orderField.innerHTML = `<option value="">No sorting</option>`;
+          allFields
+            .filter((field) => field.isValidForRead && field.type !== "Virtual")
+            .forEach((field) => {
+              const option = document.createElement("option");
+              option.value = field.logicalName;
+              option.textContent = fieldText(field);
+              orderField.appendChild(option);
+            });
+        };
+
+        const normalizeType = (attribute) => {
+          const raw =
+            attribute.AttributeTypeName?.Value ||
+            attribute.AttributeType ||
+            "Unknown";
+          return String(raw).replace(/Type$/i, "");
+        };
+
+        const isStringType = (type) =>
+          ["String", "Memo", "EntityName"].includes(type);
+        const isNumberType = (type) =>
+          ["Integer", "BigInt", "Decimal", "Double", "Money"].includes(type);
+        const isChoiceType = (type) =>
+          ["Picklist", "State", "Status", "Boolean", "MultiSelectPicklist"].includes(type);
+        const isDateType = (type) => type === "DateTime";
+        const isLookupType = (type) => ["Lookup", "Customer", "Owner"].includes(type);
+
+        const operatorsFor = (field) => {
+          const baseNull = [
+            ["eq", "Equals"],
+            ["ne", "Not equal"],
+            ["null", "Is null"],
+            ["notnull", "Is not null"]
+          ];
+
+          if (isStringType(field.type)) {
+            return [
+              ...baseNull,
+              ["contains", "Contains"],
+              ["notcontains", "Does not contain"],
+              ["startswith", "Starts with"],
+              ["endswith", "Ends with"]
+            ];
+          }
+
+          if (isNumberType(field.type) || isDateType(field.type)) {
+            return [
+              ...baseNull,
+              ["gt", "Greater than"],
+              ["ge", "Greater or equal"],
+              ["lt", "Less than"],
+              ["le", "Less or equal"]
+            ];
+          }
+
+          if (isChoiceType(field.type) || isLookupType(field.type) || field.type === "Uniqueidentifier") {
+            return baseNull;
+          }
+
+          return baseNull;
+        };
+
+        const getField = (logicalName) =>
+          allFields.find((field) => field.logicalName === logicalName);
+
+        const loadChoiceOptions = async (field) => {
+          if (!selectedEntity || !field || !isChoiceType(field.type)) return [];
+          const key = `${selectedEntity.logicalName}:${field.logicalName}`;
+          if (optionCache.has(key)) return optionCache.get(key);
+
+          let cast = "PicklistAttributeMetadata";
+          if (field.type === "Boolean") cast = "BooleanAttributeMetadata";
+          if (field.type === "State") cast = "StateAttributeMetadata";
+          if (field.type === "Status") cast = "StatusAttributeMetadata";
+          if (field.type === "MultiSelectPicklist") cast = "MultiSelectPicklistAttributeMetadata";
+
+          try {
+            const result = await apiGet(
+              `EntityDefinitions(LogicalName='${selectedEntity.logicalName}')/Attributes(LogicalName='${field.logicalName}')/Microsoft.Dynamics.CRM.${cast}?$select=LogicalName&$expand=OptionSet`
             );
-            return Math.min(Math.max(headerW, maxCell, 6), 40); // cap width 40
+
+            const rawOptions = result?.OptionSet?.Options || [];
+            const options = rawOptions.map((item) => ({
+              value: item.Value,
+              label: labelOf(item.Label) || String(item.Value)
+            }));
+
+            if (field.type === "Boolean" && !options.length) {
+              const trueOption = result?.OptionSet?.TrueOption;
+              const falseOption = result?.OptionSet?.FalseOption;
+              if (falseOption) options.push({ value: falseOption.Value, label: labelOf(falseOption.Label) || "No" });
+              if (trueOption) options.push({ value: trueOption.Value, label: labelOf(trueOption.Label) || "Yes" });
+            }
+
+            optionCache.set(key, options);
+            return options;
+          } catch (error) {
+            console.warn("Could not load choice options", field, error);
+            optionCache.set(key, []);
+            return [];
+          }
+        };
+
+        const makeValueControl = async (field, currentValue = "") => {
+          if (!field) {
+            const input = document.createElement("input");
+            input.disabled = true;
+            return input;
+          }
+
+          if (isChoiceType(field.type)) {
+            const select = document.createElement("select");
+            select.innerHTML = `<option value="">Select value...</option>`;
+            const options = await loadChoiceOptions(field);
+            options.forEach((item) => {
+              const option = document.createElement("option");
+              option.value = String(item.value);
+              option.textContent = `${item.label} (${item.value})`;
+              option.selected = String(item.value) === String(currentValue);
+              select.appendChild(option);
+            });
+            if (!options.length) {
+              const input = document.createElement("input");
+              input.placeholder = "Numeric option value";
+              input.value = currentValue;
+              return input;
+            }
+            return select;
+          }
+
+          const input = document.createElement("input");
+          input.value = currentValue;
+
+          if (isDateType(field.type)) {
+            input.type = "datetime-local";
+          } else if (isNumberType(field.type)) {
+            input.type = "number";
+            input.step = "any";
+          } else if (isLookupType(field.type) || field.type === "Uniqueidentifier") {
+            input.placeholder = "GUID";
+          } else {
+            input.placeholder = "Value";
+          }
+
+          return input;
+        };
+
+        const updateConditionRow = async (row, preserveValue = false) => {
+          const fieldSelect = row.querySelector(".arm-condition-field");
+          const operatorSelect = row.querySelector(".arm-condition-operator");
+          const valueHost = row.querySelector(".arm-condition-value");
+          const field = getField(fieldSelect.value);
+          const oldValue = preserveValue
+            ? valueHost.querySelector("input,select")?.value || ""
+            : "";
+
+          operatorSelect.innerHTML = "";
+          operatorsFor(field || { type: "Unknown" }).forEach(([value, text]) => {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = text;
+            operatorSelect.appendChild(option);
           });
 
-          const pad = (s, w) => {
-            s = safeString(s);
-            if (s.length > w) return s.slice(0, Math.max(0, w - 1)) + "…";
-            return (s + " ".repeat(w)).slice(0, w);
-          };
+          valueHost.innerHTML = "";
+          valueHost.appendChild(await makeValueControl(field, oldValue));
+          updateConditionValueState(row);
+          updateQueryPreview();
+        };
 
-          lines.push(
-            shownCols.map((c, i) => pad(escapePipes(c), colWidths[i])).join(" | ")
-          );
-          lines.push(
-            shownCols.map((_, i) => "-".repeat(colWidths[i])).join("-+-")
-          );
+        const updateConditionValueState = (row) => {
+          const operator = row.querySelector(".arm-condition-operator")?.value;
+          const control = row.querySelector(".arm-condition-value input, .arm-condition-value select");
+          if (!control) return;
+          const noValue = operator === "null" || operator === "notnull";
+          control.disabled = noValue;
+          control.style.opacity = noValue ? ".45" : "1";
+        };
 
-          for (let i = 0; i < rows.length; i++) {
-            const r = rows[i];
-            const vals = shownCols.map((c, idx) => {
-              const v = getShownVal(r, c);
-              return pad(escapePipes(v), colWidths[idx]);
+        const addCondition = async () => {
+          const row = document.createElement("div");
+          row.className = "arm-condition";
+          row.innerHTML = `
+            <label>Join
+              <select class="arm-condition-join">
+                <option value="and">AND</option>
+                <option value="or">OR</option>
+              </select>
+            </label>
+            <label>Column
+              <select class="arm-condition-field"></select>
+            </label>
+            <label>Operator
+              <select class="arm-condition-operator"></select>
+            </label>
+            <label>Value
+              <span class="arm-condition-value"></span>
+            </label>
+            <button class="arm-remove" title="Remove">✕</button>
+          `;
+
+          const fieldSelect = row.querySelector(".arm-condition-field");
+          allFields
+            .filter((field) => field.isValidForRead)
+            .forEach((field) => {
+              const option = document.createElement("option");
+              option.value = field.logicalName;
+              option.textContent = fieldText(field);
+              fieldSelect.appendChild(option);
             });
-            lines.push(vals.join(" | "));
-            if (i >= 199) { lines.push("... (truncated to 200 rows)"); break; }
+
+          row.querySelector(".arm-condition-join").disabled =
+            conditionsWrap.children.length === 0;
+
+          fieldSelect.addEventListener("change", () => updateConditionRow(row));
+          row.querySelector(".arm-condition-operator").addEventListener("change", () => {
+            updateConditionValueState(row);
+            updateQueryPreview();
+          });
+          row.querySelector(".arm-condition-join").addEventListener("change", updateQueryPreview);
+          row.querySelector(".arm-condition-value").addEventListener("input", updateQueryPreview);
+          row.querySelector(".arm-condition-value").addEventListener("change", updateQueryPreview);
+          row.querySelector(".arm-remove").addEventListener("click", () => {
+            row.remove();
+            [...conditionsWrap.children].forEach((child, index) => {
+              child.querySelector(".arm-condition-join").disabled = index === 0;
+            });
+            updateQueryPreview();
+          });
+
+          conditionsWrap.appendChild(row);
+          await updateConditionRow(row);
+        };
+
+        const escapeString = (value) => String(value).replace(/'/g, "''");
+        const cleanGuid = (value) => String(value || "").replace(/[{}]/g, "").trim();
+
+        const formatValue = (field, value) => {
+          if (isNumberType(field.type)) return String(Number(value));
+          if (field.type === "Boolean") return String(value).toLowerCase() === "true" || String(value) === "1" ? "true" : "false";
+          if (isChoiceType(field.type)) return String(Number(value));
+          if (isLookupType(field.type)) return cleanGuid(value);
+          if (field.type === "Uniqueidentifier") return cleanGuid(value);
+          if (isDateType(field.type)) {
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) throw new Error(`Invalid date for ${field.logicalName}`);
+            return date.toISOString();
+          }
+          return `'${escapeString(value)}'`;
+        };
+
+        const conditionExpression = (row) => {
+          const field = getField(row.querySelector(".arm-condition-field").value);
+          const operator = row.querySelector(".arm-condition-operator").value;
+          const value = row.querySelector(".arm-condition-value input, .arm-condition-value select")?.value ?? "";
+          if (!field) return null;
+
+          const property = isLookupType(field.type)
+            ? `_${field.logicalName}_value`
+            : field.logicalName;
+
+          if (operator === "null") return `${property} eq null`;
+          if (operator === "notnull") return `${property} ne null`;
+          if (!String(value).trim()) throw new Error(`Enter a value for ${field.displayName || field.logicalName}`);
+
+          const formatted = formatValue(field, value);
+          if (operator === "contains") return `contains(${property},${formatted})`;
+          if (operator === "notcontains") return `not contains(${property},${formatted})`;
+          if (operator === "startswith") return `startswith(${property},${formatted})`;
+          if (operator === "endswith") return `endswith(${property},${formatted})`;
+          return `${property} ${operator} ${formatted}`;
+        };
+
+        const selectedColumns = () =>
+          allFields
+            .filter((field) => selectedColumnNames.has(field.logicalName))
+            .map((field) => field.logicalName);
+
+        const buildRelativeQuery = () => {
+          if (!selectedEntity) return "";
+          const params = [];
+          const cols = selectedColumns();
+          if (cols.length) params.push(`$select=${cols.join(",")}`);
+
+          const expressions = [];
+          [...conditionsWrap.children].forEach((row, index) => {
+            const expression = conditionExpression(row);
+            if (!expression) return;
+            const join = index === 0
+              ? ""
+              : ` ${row.querySelector(".arm-condition-join").value} `;
+            expressions.push(`${join}${expression}`);
+          });
+
+          if (includeInactive.value === "no" && getField("statecode")) {
+            expressions.push(`${expressions.length ? " and " : ""}statecode eq 0`);
           }
 
-          // JSON dump ALL rows (for discovery) - cap to 50 for sanity
-          lines.push("\n--- ALL RECORDS (JSON, up to 50) ---\n");
+          if (expressions.length) params.push(`$filter=${expressions.join("")}`);
+          if (orderField.value) params.push(`$orderby=${orderField.value} ${orderDirection.value}`);
+          params.push(`$top=${Number(topSelect.value) || 100}`);
+
+          return `${selectedEntity.entitySetName}?${params.join("&")}`;
+        };
+
+        const updateQueryPreview = () => {
           try {
-            const take = rows.slice(0, 50);
-            lines.push(JSON.stringify(take, null, 2));
-            if (rows.length > 50) lines.push(`\n... (${rows.length - 50} more not shown)`);
-          } catch (e) {
-            lines.push(String(rows));
+            const relative = buildRelativeQuery();
+            queryBox.value = relative ? `${API}/${relative}` : "";
+            runBtn.disabled = !relative;
+          } catch (error) {
+            queryBox.value = `Query is incomplete: ${error.message}`;
+          }
+        };
+
+        const pickRecommendedColumns = () => {
+          const preferred = [
+            selectedEntity?.primaryIdAttribute,
+            selectedEntity?.primaryNameAttribute,
+            "statecode",
+            "statuscode",
+            "createdon",
+            "modifiedon",
+            "ownerid"
+          ].filter(Boolean);
+
+          const existing = new Set(allFields.map((field) => field.logicalName));
+          const final = preferred.filter((name) => existing.has(name));
+          selectedColumnNames.clear();
+          final.forEach((name) => selectedColumnNames.add(name));
+          renderFields();
+          updateQueryPreview();
+        };
+
+        const loadEntities = async () => {
+          const response = await apiGet(
+            "EntityDefinitions?$select=LogicalName,SchemaName,EntitySetName,DisplayName,PrimaryIdAttribute,PrimaryNameAttribute,IsPrivate,IsIntersect,IsActivity"
+          );
+
+          allEntities = (response.value || [])
+            .filter((item) => item.LogicalName && item.EntitySetName && !item.IsPrivate)
+            .map((item) => ({
+              logicalName: item.LogicalName,
+              schemaName: item.SchemaName || "",
+              entitySetName: item.EntitySetName,
+              displayName: labelOf(item.DisplayName),
+              primaryIdAttribute: item.PrimaryIdAttribute,
+              primaryNameAttribute: item.PrimaryNameAttribute,
+              isIntersect: Boolean(item.IsIntersect),
+              isActivity: Boolean(item.IsActivity)
+            }))
+            .sort((a, b) => entityText(a).localeCompare(entityText(b)));
+
+          filteredEntities = [...allEntities];
+          renderEntities();
+          setStatus(`Loaded ${allEntities.length} tables. Select one.`, "success");
+        };
+
+        const loadFields = async (entity) => {
+          const token = ++loadToken;
+          selectedEntity = entity;
+          setStatus(`Loading columns for ${entity.displayName || entity.logicalName}...`);
+          runBtn.disabled = true;
+          fieldSearch.disabled = true;
+          columnsSelect.disabled = true;
+          addConditionBtn.disabled = true;
+          orderField.disabled = true;
+          conditionsWrap.innerHTML = "";
+          fieldSearch.value = "";
+          selectedColumnNames.clear();
+          updateSelectedColumnsSummary();
+
+          const response = await apiGet(
+            `EntityDefinitions(LogicalName='${entity.logicalName}')/Attributes?` +
+            "$select=LogicalName,SchemaName,DisplayName,AttributeType,AttributeTypeName,IsValidForRead,IsPrimaryId,IsPrimaryName,IsLogical,IsSecured"
+          );
+          if (token !== loadToken) return;
+
+          allFields = (response.value || [])
+            .filter((item) => item.LogicalName && item.IsValidForRead !== false)
+            .map((item) => ({
+              logicalName: item.LogicalName,
+              schemaName: item.SchemaName || "",
+              displayName: labelOf(item.DisplayName),
+              type: normalizeType(item),
+              isValidForRead: item.IsValidForRead !== false,
+              isPrimaryId: Boolean(item.IsPrimaryId),
+              isPrimaryName: Boolean(item.IsPrimaryName),
+              isLogical: Boolean(item.IsLogical),
+              isSecured: Boolean(item.IsSecured)
+            }))
+            .sort((a, b) => fieldText(a).localeCompare(fieldText(b)));
+
+          filteredFields = [...allFields];
+          renderFields();
+          renderOrderFields();
+          fieldSearch.disabled = false;
+          columnsSelect.disabled = false;
+          addConditionBtn.disabled = false;
+          orderField.disabled = false;
+          pickRecommendedColumns();
+          await addCondition();
+          setStatus(`Loaded ${allFields.length} columns for ${entityText(entity)}.`, "success");
+          updateQueryPreview();
+        };
+
+        const displayValue = (row, fieldName) => {
+          const formattedKey = `${fieldName}@OData.Community.Display.V1.FormattedValue`;
+          if (row[formattedKey] !== undefined) return row[formattedKey];
+          const field = getField(fieldName);
+          if (field && isLookupType(field.type)) {
+            const lookupKey = `_${fieldName}_value`;
+            return row[`${lookupKey}@OData.Community.Display.V1.FormattedValue`] ?? row[lookupKey] ?? "";
+          }
+          const value = row[fieldName];
+          if (value === null || value === undefined) return "";
+          if (typeof value === "object") return JSON.stringify(value);
+          return String(value);
+        };
+
+        const recordId = (row) => row[selectedEntity.primaryIdAttribute];
+
+        const renderResults = (rows) => {
+          currentRows = rows;
+          const columns = selectedColumns().length
+            ? selectedColumns()
+            : Object.keys(rows[0] || {}).filter((key) => !key.includes("@"));
+
+          if (!rows.length) {
+            resultsWrap.innerHTML = `<div class="arm-empty">No records found.</div>`;
+            setCountText("0 rows");
+            return;
           }
 
-          resultTa.value = lines.join("\n");
-          status.textContent = `✅ Done (${rows.length} rows).`;
-          resultTa.focus();
-          resultTa.select();
-        } catch (err) {
-          status.textContent = "❌ Failed.";
-          resultTa.value =
-            "ERROR:\n" +
-            (err?.message || err?.toString?.() || "Unknown error") +
-            "\n\nTip: Put ONLY columns in Columns. If you add expand, append like: & $expand=nav($select=name)\n" +
-            "Tip: filter must be valid OData. For strings use single quotes: firstname eq 'Roi'";
+          const table = document.createElement("table");
+          const thead = document.createElement("thead");
+          const trh = document.createElement("tr");
+
+          columns.forEach((column) => {
+            const field = getField(column);
+            const th = document.createElement("th");
+            th.textContent = field?.displayName
+              ? `${field.displayName} (${column})`
+              : column;
+            trh.appendChild(th);
+          });
+          thead.appendChild(trh);
+          table.appendChild(thead);
+
+          const tbody = document.createElement("tbody");
+          rows.forEach((row) => {
+            const tr = document.createElement("tr");
+            columns.forEach((column) => {
+              const td = document.createElement("td");
+              const value = displayValue(row, column);
+              td.title = value;
+
+              if (column === selectedEntity.primaryIdAttribute && recordId(row)) {
+                const link = document.createElement("a");
+                link.className = "arm-link";
+                link.href = "#";
+                link.textContent = value;
+                link.addEventListener("click", async (event) => {
+                  event.preventDefault();
+                  try {
+                    await window.Xrm.Navigation.openForm({
+                      entityName: selectedEntity.logicalName,
+                      entityId: recordId(row),
+                      openInNewWindow: true
+                    });
+                  } catch (error) {
+                    alert(error.message);
+                  }
+                });
+                td.appendChild(link);
+              } else {
+                td.textContent = value;
+              }
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+          resultsWrap.innerHTML = "";
+          resultsWrap.appendChild(table);
+          setCountText(`${rows.length} rows on this page`);
+        };
+
+        const runUrl = async (url, pushHistory = false) => {
+          try {
+            runBtn.disabled = true;
+            nextBtn.disabled = true;
+            prevBtn.disabled = true;
+            setStatus("Running query...");
+            resultsWrap.innerHTML = `<div class="arm-empty">Loading...</div>`;
+
+            if (pushHistory && currentPageUrl) history.push(currentPageUrl);
+            const response = await requestJson(url);
+            currentPageUrl = url;
+            nextLink = response?.["@odata.nextLink"] || null;
+            renderResults(response?.value || []);
+            nextBtn.disabled = !nextLink;
+            prevBtn.disabled = history.length === 0;
+            setStatus(
+              `Query completed. ${response?.value?.length || 0} rows returned${nextLink ? "; more rows available" : ""}.`,
+              "success"
+            );
+          } catch (error) {
+            console.error(error);
+            setStatus(error.message, "error");
+            resultsWrap.innerHTML = `<div class="arm-empty" style="color:#fca5a5">${html(error.message)}</div>`;
+          } finally {
+            runBtn.disabled = false;
+          }
+        };
+
+        entitySearch.addEventListener("input", () => {
+          const term = entitySearch.value.trim().toLowerCase();
+          filteredEntities = allEntities.filter((entity) =>
+            [entity.displayName, entity.logicalName, entity.schemaName, entity.entitySetName]
+              .some((value) => String(value || "").toLowerCase().includes(term))
+          );
+          renderEntities();
+        });
+
+        entitySelect.addEventListener("change", () => {
+          const entity = filteredEntities[Number(entitySelect.value)];
+          if (entity) loadFields(entity);
+        });
+
+        entitySelect.addEventListener("dblclick", () => {
+          const entity = filteredEntities[Number(entitySelect.value)];
+          if (entity) loadFields(entity);
+        });
+
+        fieldSearch.addEventListener("input", () => {
+          const term = fieldSearch.value.trim().toLowerCase();
+          filteredFields = allFields.filter((field) =>
+            [field.displayName, field.logicalName, field.schemaName, field.type]
+              .some((value) => String(value || "").toLowerCase().includes(term))
+          );
+          renderFields();
+        });
+
+        columnsSelect.addEventListener("change", () => {
+          syncVisibleColumnSelections();
+          updateQueryPreview();
+        });
+        orderField.addEventListener("change", updateQueryPreview);
+        orderDirection.addEventListener("change", updateQueryPreview);
+        topSelect.addEventListener("change", updateQueryPreview);
+        includeInactive.addEventListener("change", updateQueryPreview);
+        addConditionBtn.addEventListener("click", addCondition);
+        $("armSelectRecommended").addEventListener("click", pickRecommendedColumns);
+        $("armClearColumns").addEventListener("click", () => {
+          selectedColumnNames.clear();
+          renderFields();
+          updateQueryPreview();
+        });
+
+        runBtn.addEventListener("click", async () => {
+          try {
+            const relative = buildRelativeQuery();
+            if (!relative) return;
+            history = [];
+            currentPageUrl = null;
+            await runUrl(`${API}/${relative}`);
+          } catch (error) {
+            setStatus(error.message, "error");
+          }
+        });
+
+        nextBtn.addEventListener("click", async () => {
+          if (nextLink) await runUrl(nextLink, true);
+        });
+
+        prevBtn.addEventListener("click", async () => {
+          const previous = history.pop();
+          if (previous) {
+            currentPageUrl = null;
+            await runUrl(previous, false);
+            prevBtn.disabled = history.length === 0;
+          }
+        });
+
+        $("armCopyQuery").addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(queryBox.value);
+            setStatus("Query copied to clipboard.", "success");
+          } catch {
+            queryBox.focus();
+            queryBox.select();
+            document.execCommand("copy");
+            setStatus("Query copied to clipboard.", "success");
+          }
+        });
+
+        const close = () => {
+          style.remove();
+          overlay.remove();
+        };
+        $("armCloseTop").addEventListener("click", close);
+
+        try {
+          await loadEntities();
+        } catch (error) {
+          console.error(error);
+          setStatus(error.message, "error");
         }
-      };
-
-      footer.appendChild(btnClose);
-      footer.appendChild(btnCopy);
-      footer.appendChild(btnRun);
-
-      box.appendChild(header);
-      box.appendChild(body);
-      box.appendChild(footer);
-      overlay.appendChild(box);
-      document.body.appendChild(overlay);
-
-      entityInput.focus();
-    }
+      }
+    });
   });
-});
+
+
+
+
+
+
 
 
 // popup.js  (FetchXML UI button - FULL CODE, pretty output as CSV)
@@ -11694,14 +12513,6 @@ document.getElementById("teamManagementUi")?.addEventListener("click", async () 
 });
 
 
-
-
-
-
-
-
-
-
 document
   .getElementById("solutionLayersInspector")
   .addEventListener("click", async () => {
@@ -13292,5 +14103,595 @@ document
       }
     });
   });
+
+
+document
+  .getElementById("openSystemUserUi")
+  .addEventListener("click", async () => {
+    const tab = await __d365GetActiveTab();
+    if (!tab?.id) return;
+
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      world: "MAIN",
+      func: async () => {
+        const MODAL_ID = "__rv_open_systemuser";
+        document.getElementById(MODAL_ID)?.remove();
+
+        const globalContext =
+          window.Xrm?.Utility?.getGlobalContext?.();
+
+        const clientUrl = globalContext?.getClientUrl?.();
+
+        if (!clientUrl) {
+          alert("D365 context not found.");
+          return;
+        }
+
+        const cleanGuid = (value) =>
+          String(value || "")
+            .replace(/[{}]/g, "")
+            .trim()
+            .toLowerCase();
+
+        const escapeOData = (value) =>
+          String(value || "").replace(/'/g, "''");
+
+        const html = (value) =>
+          String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+
+        const requestJson = async (url) => {
+          const response = await fetch(url, {
+            method: "GET",
+            credentials: "same-origin",
+            headers: {
+              Accept: "application/json",
+              "OData-Version": "4.0",
+              "OData-MaxVersion": "4.0",
+              Prefer:
+                'odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
+            }
+          });
+
+          const text = await response.text();
+          let body = null;
+
+          try {
+            body = text ? JSON.parse(text) : null;
+          } catch {
+            body = text;
+          }
+
+          if (!response.ok) {
+            throw new Error(
+              body?.error?.message ||
+                `HTTP ${response.status} ${response.statusText}`
+            );
+          }
+
+          return body;
+        };
+
+        const openUser = async (userId) => {
+          const id = cleanGuid(userId);
+          if (!id) return;
+
+          try {
+            await window.Xrm.Navigation.openForm({
+              entityName: "systemuser",
+              entityId: id,
+              openInNewWindow: true
+            });
+          } catch (error) {
+            console.error(error);
+            alert(error?.message || "Could not open the user record.");
+          }
+        };
+
+        const style = document.createElement("style");
+        style.textContent = `
+          #${MODAL_ID}, #${MODAL_ID} * { box-sizing:border-box; }
+
+          #${MODAL_ID} {
+            position:fixed;
+            inset:0;
+            z-index:2147483647;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            padding:18px;
+            direction:rtl;
+            background:rgba(15,23,42,.62);
+            backdrop-filter:blur(5px);
+            font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif;
+          }
+
+          #${MODAL_ID} .osu-dialog {
+            width:min(900px,96vw);
+            max-height:min(760px,94vh);
+            display:flex;
+            flex-direction:column;
+            overflow:hidden;
+            color:#111827;
+            background:#ffffff;
+            border:1px solid #cbd5e1;
+            border-radius:18px;
+            box-shadow:0 28px 90px rgba(0,0,0,.34);
+          }
+
+          #${MODAL_ID} .osu-header {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:14px;
+            padding:17px 19px;
+            background:#ffffff;
+            border-bottom:1px solid #e2e8f0;
+          }
+
+          #${MODAL_ID} .osu-title {
+            color:#0f172a;
+            font-size:20px;
+            font-weight:950;
+          }
+
+          #${MODAL_ID} .osu-subtitle {
+            margin-top:3px;
+            color:#64748b;
+            font-size:12px;
+          }
+
+          #${MODAL_ID} .osu-close {
+            width:40px;
+            height:40px;
+            padding:0;
+            cursor:pointer;
+            color:#111827;
+            background:#ffffff;
+            border:1px solid #cbd5e1;
+            border-radius:11px;
+            font-size:17px;
+            font-weight:900;
+          }
+
+          #${MODAL_ID} .osu-body {
+            display:flex;
+            flex-direction:column;
+            gap:14px;
+            min-height:0;
+            padding:16px;
+            overflow:auto;
+            background:#f8fafc;
+          }
+
+          #${MODAL_ID} .osu-me-card {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:14px;
+            padding:14px;
+            background:#ffffff;
+            border:1px solid #dbe3ec;
+            border-radius:14px;
+          }
+
+          #${MODAL_ID} .osu-me-title {
+            color:#0f172a;
+            font-size:14px;
+            font-weight:950;
+          }
+
+          #${MODAL_ID} .osu-me-value {
+            margin-top:4px;
+            color:#64748b;
+            font-size:12px;
+            direction:ltr;
+            text-align:right;
+          }
+
+          #${MODAL_ID} .osu-search-panel {
+            padding:14px;
+            background:#ffffff;
+            border:1px solid #dbe3ec;
+            border-radius:14px;
+          }
+
+          #${MODAL_ID} .osu-label {
+            margin-bottom:7px;
+            color:#334155;
+            font-size:12px;
+            font-weight:900;
+          }
+
+          #${MODAL_ID} .osu-search-row {
+            display:grid;
+            grid-template-columns:minmax(0,1fr) auto;
+            gap:9px;
+          }
+
+          #${MODAL_ID} .osu-input {
+            width:100%;
+            min-width:0;
+            padding:11px 12px;
+            color:#111827;
+            background:#ffffff;
+            border:1px solid #b8c3d1;
+            border-radius:10px;
+            outline:none;
+            font-size:13px;
+          }
+
+          #${MODAL_ID} .osu-input:focus {
+            border-color:#0f172a;
+            box-shadow:0 0 0 2px rgba(15,23,42,.09);
+          }
+
+          #${MODAL_ID} .osu-help {
+            margin-top:7px;
+            color:#64748b;
+            font-size:11px;
+          }
+
+          #${MODAL_ID} .osu-btn {
+            padding:10px 14px;
+            cursor:pointer;
+            color:#111827;
+            background:#ffffff;
+            border:1px solid #b8c3d1;
+            border-radius:10px;
+            font-size:12px;
+            font-weight:900;
+          }
+
+          #${MODAL_ID} .osu-btn:hover {
+            background:#f1f5f9;
+          }
+
+          #${MODAL_ID} .osu-primary {
+            color:#ffffff;
+            background:#111827;
+            border-color:#111827;
+          }
+
+          #${MODAL_ID} .osu-primary:hover {
+            background:#000000;
+          }
+
+          #${MODAL_ID} .osu-status {
+            min-height:20px;
+            color:#64748b;
+            font-size:12px;
+          }
+
+          #${MODAL_ID} .osu-results {
+            display:flex;
+            flex-direction:column;
+            gap:8px;
+          }
+
+          #${MODAL_ID} .osu-user {
+            width:100%;
+            display:grid;
+            grid-template-columns:minmax(180px,1.25fr) minmax(180px,1fr) minmax(160px,.9fr) auto;
+            gap:12px;
+            align-items:center;
+            padding:12px 13px;
+            cursor:pointer;
+            text-align:right;
+            color:#111827;
+            background:#ffffff;
+            border:1px solid #dbe3ec;
+            border-radius:12px;
+          }
+
+          #${MODAL_ID} .osu-user:hover {
+            border-color:#94a3b8;
+            box-shadow:0 7px 18px rgba(15,23,42,.07);
+            transform:translateY(-1px);
+          }
+
+          #${MODAL_ID} .osu-name {
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+            color:#0f172a;
+            font-size:13px;
+            font-weight:950;
+          }
+
+          #${MODAL_ID} .osu-domain,
+          #${MODAL_ID} .osu-email,
+          #${MODAL_ID} .osu-bu {
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+            color:#475569;
+            font-size:11px;
+            direction:ltr;
+            text-align:left;
+          }
+
+          #${MODAL_ID} .osu-badge {
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            padding:4px 8px;
+            border-radius:999px;
+            font-size:10px;
+            font-weight:900;
+            white-space:nowrap;
+          }
+
+          #${MODAL_ID} .osu-active {
+            color:#047857;
+            background:#ecfdf5;
+            border:1px solid #a7f3d0;
+          }
+
+          #${MODAL_ID} .osu-disabled {
+            color:#b91c1c;
+            background:#fef2f2;
+            border:1px solid #fecaca;
+          }
+
+          #${MODAL_ID} .osu-empty {
+            padding:28px;
+            color:#64748b;
+            text-align:center;
+            background:#ffffff;
+            border:1px dashed #cbd5e1;
+            border-radius:12px;
+          }
+
+          @media (max-width:700px) {
+            #${MODAL_ID} {
+              padding:0;
+            }
+
+            #${MODAL_ID} .osu-dialog {
+              width:100vw;
+              max-height:100vh;
+              height:100vh;
+              border-radius:0;
+            }
+
+            #${MODAL_ID} .osu-me-card {
+              align-items:stretch;
+              flex-direction:column;
+            }
+
+            #${MODAL_ID} .osu-search-row,
+            #${MODAL_ID} .osu-user {
+              grid-template-columns:1fr;
+            }
+
+            #${MODAL_ID} .osu-btn {
+              width:100%;
+            }
+          }
+        `;
+
+        document.head.appendChild(style);
+
+        const currentUserId = cleanGuid(
+          globalContext?.userSettings?.userId
+        );
+
+        const currentUserName =
+          globalContext?.userSettings?.userName || "Current user";
+
+        const overlay = document.createElement("div");
+        overlay.id = MODAL_ID;
+        overlay.innerHTML = `
+          <div class="osu-dialog">
+            <div class="osu-header">
+              <div>
+                <div class="osu-title">Open System User</div>
+                <div class="osu-subtitle">Open the logged-in user or search by name, domain or email</div>
+              </div>
+              <button class="osu-close" id="osuClose">✕</button>
+            </div>
+
+            <div class="osu-body">
+              <div class="osu-me-card">
+                <div>
+                  <div class="osu-me-title">Logged-in user</div>
+                  <div class="osu-me-value">${html(currentUserName)} · ${html(currentUserId)}</div>
+                </div>
+                <button class="osu-btn osu-primary" id="osuOpenMe">Open my user</button>
+              </div>
+
+              <div class="osu-search-panel">
+                <div class="osu-label">Search system users</div>
+                <div class="osu-search-row">
+                  <input
+                    class="osu-input"
+                    id="osuSearch"
+                    placeholder="Name, domain, email or user GUID"
+                    autocomplete="off"
+                  />
+                  <button class="osu-btn osu-primary" id="osuSearchButton">Search</button>
+                </div>
+                <div class="osu-help">
+                  Searches fullname, domainname and internalemailaddress. Pasting a GUID opens the user directly.
+                </div>
+              </div>
+
+              <div class="osu-status" id="osuStatus">Enter at least 2 characters.</div>
+              <div class="osu-results" id="osuResults"></div>
+            </div>
+          </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        const searchInput = overlay.querySelector("#osuSearch");
+        const searchButton = overlay.querySelector("#osuSearchButton");
+        const results = overlay.querySelector("#osuResults");
+        const status = overlay.querySelector("#osuStatus");
+
+        const setStatus = (message, type = "normal") => {
+          const colors = {
+            normal: "#64748b",
+            success: "#047857",
+            warning: "#b45309",
+            error: "#b91c1c"
+          };
+
+          status.textContent = message;
+          status.style.color = colors[type] || colors.normal;
+        };
+
+        const isGuid = (value) =>
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            cleanGuid(value)
+          );
+
+        const renderUsers = (users) => {
+          results.innerHTML = "";
+
+          if (!users.length) {
+            results.innerHTML = `
+              <div class="osu-empty">No matching system users were found.</div>
+            `;
+            return;
+          }
+
+          users.forEach((user) => {
+            const businessUnit =
+              user[
+                "_businessunitid_value@OData.Community.Display.V1.FormattedValue"
+              ] || "";
+
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "osu-user";
+            button.innerHTML = `
+              <div>
+                <div class="osu-name" title="${html(user.fullname || "")}">
+                  ${html(user.fullname || "(No name)")}
+                </div>
+                <div class="osu-bu" title="${html(businessUnit)}">
+                  ${html(businessUnit || "No business unit")}
+                </div>
+              </div>
+
+              <div class="osu-domain" title="${html(user.domainname || "")}">
+                ${html(user.domainname || "No domain")}
+              </div>
+
+              <div class="osu-email" title="${html(user.internalemailaddress || "")}">
+                ${html(user.internalemailaddress || "No email")}
+              </div>
+
+              <span class="osu-badge ${user.isdisabled ? "osu-disabled" : "osu-active"}">
+                ${user.isdisabled ? "Disabled" : "Active"}
+              </span>
+            `;
+
+            button.addEventListener("click", () =>
+              openUser(user.systemuserid)
+            );
+
+            results.appendChild(button);
+          });
+        };
+
+        const searchUsers = async () => {
+          const value = searchInput.value.trim();
+
+          if (!value) {
+            results.innerHTML = "";
+            setStatus("Enter a name, domain, email or user GUID.", "warning");
+            return;
+          }
+
+          if (isGuid(value)) {
+            setStatus("Opening user record...", "success");
+            await openUser(value);
+            return;
+          }
+
+          if (value.length < 2) {
+            results.innerHTML = "";
+            setStatus("Enter at least 2 characters.", "warning");
+            return;
+          }
+
+          searchButton.disabled = true;
+          searchButton.textContent = "Searching...";
+          results.innerHTML = `<div class="osu-empty">Loading users...</div>`;
+          setStatus("Searching system users...");
+
+          try {
+            const safeValue = escapeOData(value);
+            const filter = [
+              `contains(fullname,'${safeValue}')`,
+              `contains(domainname,'${safeValue}')`,
+              `contains(internalemailaddress,'${safeValue}')`
+            ].join(" or ");
+
+            const query =
+              `${clientUrl}/api/data/v9.2/systemusers?` +
+              `$select=systemuserid,fullname,domainname,internalemailaddress,isdisabled,_businessunitid_value&` +
+              `$filter=${encodeURIComponent(filter)}&` +
+              `$orderby=fullname asc&` +
+              `$top=50`;
+
+            const response = await requestJson(query);
+            const users = response?.value || [];
+
+            renderUsers(users);
+            setStatus(
+              users.length
+                ? `${users.length} user(s) found. Click a row to open the record.`
+                : "No users found.",
+              users.length ? "success" : "warning"
+            );
+          } catch (error) {
+            console.error(error);
+            results.innerHTML = `
+              <div class="osu-empty" style="color:#b91c1c">
+                ${html(error?.message || "Search failed.")}
+              </div>
+            `;
+            setStatus(error?.message || "Search failed.", "error");
+          } finally {
+            searchButton.disabled = false;
+            searchButton.textContent = "Search";
+          }
+        };
+
+        overlay
+          .querySelector("#osuClose")
+          .addEventListener("click", () => overlay.remove());
+
+        overlay
+          .querySelector("#osuOpenMe")
+          .addEventListener("click", () => openUser(currentUserId));
+
+        searchButton.addEventListener("click", searchUsers);
+
+        searchInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            searchUsers();
+          }
+        });
+
+        searchInput.focus();
+      }
+    });
+  });
+
+
+
+
+
 
 
