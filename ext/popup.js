@@ -10244,6 +10244,10 @@ Start Time: ${escapeHtml(trace["performanceexecutionstarttime@OData.Community.Di
 });
 
 
+
+
+
+
 document.getElementById("fetchBuilderUi").addEventListener("click", async () => {
   const tab = await __d365GetActiveTab();
   if (!tab?.id) return;
@@ -10254,6 +10258,12 @@ document.getElementById("fetchBuilderUi").addEventListener("click", async () => 
     func: async () => {
       document.getElementById("__d365_fetch_builder")?.remove();
 
+      const API_VERSION = "v9.2";
+      const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
+      const metadataCache = new Map();
+      const relationshipCache = new Map();
+      const optionCache = new Map();
+
       const escapeXml = (value) =>
         String(value ?? "")
           .replaceAll("&", "&amp;")
@@ -10262,672 +10272,1512 @@ document.getElementById("fetchBuilderUi").addEventListener("click", async () => 
           .replaceAll('"', "&quot;")
           .replaceAll("'", "&apos;");
 
+      const escapeHtml = (value) =>
+        String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+
       const getLabel = (displayName, fallback) =>
         displayName?.UserLocalizedLabel?.Label ||
         displayName?.LocalizedLabels?.[0]?.Label ||
         fallback ||
         "";
 
-      const fetchAll = async (url) => {
-        const all = [];
+      const createId = (prefix = "id") =>
+        `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
 
-        while (url) {
-          const res = await fetch(url, {
-            headers: {
-              Accept: "application/json",
-              "OData-MaxVersion": "4.0",
-              "OData-Version": "4.0"
-            }
-          });
+      const normalizeGuid = (value) => String(value || "").replace(/[{}]/g, "").trim();
 
-          const data = await res.json();
-
-          if (!res.ok) {
-            throw new Error(data?.error?.message || "Fetch failed");
+      const requestJson = async (url, options = {}) => {
+        const response = await fetch(url, {
+          ...options,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            ...(options.headers || {})
           }
+        });
 
-          all.push(...(data.value || []));
-          url = data["@odata.nextLink"] || null;
+        const text = await response.text();
+        let data = null;
+
+        if (text) {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text;
+          }
         }
 
-        return all;
+        if (!response.ok) {
+          throw new Error(data?.error?.message || data?.Message || text || `HTTP ${response.status}`);
+        }
+
+        return data;
       };
+
+      const fetchAll = async (url) => {
+        const rows = [];
+        let nextUrl = url;
+
+        while (nextUrl) {
+          const data = await requestJson(nextUrl);
+          rows.push(...(data?.value || []));
+          nextUrl = data?.["@odata.nextLink"] || null;
+        }
+
+        return rows;
+      };
+
+      const defaultFilter = () => ({
+        id: createId("filter"),
+        type: "and",
+        items: []
+      });
+
+      const defaultCondition = (field = "") => ({
+        id: createId("condition"),
+        kind: "condition",
+        field,
+        operator: "eq",
+        value: "",
+        values: []
+      });
 
       const state = {
         entities: [],
-        fields: [],
         entity: null,
-        filterType: "and",
+        fields: [],
         selectedColumns: [],
-        conditions: []
+        rootFilter: defaultFilter(),
+        orders: [],
+        links: [],
+        options: {
+          top: 50,
+          distinct: false,
+          noLock: false,
+          returnTotalRecordCount: false
+        },
+        activeTab: "builder",
+        lastResults: [],
+        lastDuration: 0,
+        importedXml: ""
       };
 
       const overlay = document.createElement("div");
       overlay.id = "__d365_fetch_builder";
-      overlay.style.cssText = `
-        position: fixed;
-        inset: 0;
-        z-index: 2147483647;
-        background: rgba(0,0,0,.35);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-        direction: ltr;
-      `;
-
-      const box = document.createElement("div");
-      box.style.cssText = `
-        width: min(1200px, 96vw);
-        height: min(880px, 94vh);
-        background: #fff;
-        border-radius: 16px;
-        box-shadow: 0 18px 50px rgba(0,0,0,.35);
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      `;
-
-      box.innerHTML = `
-        <div style="padding:14px 16px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
-          <div style="font-weight:900;font-size:16px;">🧱 Fetch Builder</div>
-          <button id="fbClose" style="border:1px solid #cbd5e1;background:#fff;border-radius:10px;padding:8px 12px;font-weight:700;cursor:pointer;">Close</button>
-        </div>
-
-        <div style="padding:14px 16px;display:grid;grid-template-columns:1fr 1fr;gap:14px;overflow:auto;">
-          <div style="display:grid;gap:8px;">
-            <label style="font-weight:800;">Entity</label>
-            <input id="fbEntitySearch" placeholder="Search entity by display name / logical name"
-              style="border:1px solid #cbd5e1;border-radius:10px;padding:10px;" />
-            <select id="fbEntitySelect" size="8"
-              style="border:1px solid #cbd5e1;border-radius:10px;padding:8px;"></select>
+      overlay.innerHTML = `
+        <style>
+          #__d365_fetch_builder {
+            position: fixed;
+            inset: 0;
+            z-index: 2147483647;
+            background: rgba(15, 23, 42, .48);
+            backdrop-filter: blur(3px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 14px;
+            direction: ltr;
+            color: #0f172a;
+            font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+          }
+          #__d365_fetch_builder * { box-sizing: border-box; }
+          #__d365_fetch_builder .fb-shell {
+            width: min(1500px, 98vw);
+            height: min(960px, 96vh);
+            background: #f8fafc;
+            border: 1px solid rgba(148, 163, 184, .35);
+            border-radius: 18px;
+            box-shadow: 0 24px 80px rgba(15, 23, 42, .38);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+          }
+          #__d365_fetch_builder .fb-header {
+            height: 66px;
+            padding: 0 18px;
+            background: #fff;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex: 0 0 auto;
+          }
+          #__d365_fetch_builder .fb-title { display:flex; align-items:center; gap:11px; }
+          #__d365_fetch_builder .fb-logo {
+            width: 34px; height: 34px; border-radius: 10px;
+            background: linear-gradient(135deg,#f97316,#ea580c);
+            color: white; display:grid; place-items:center; font-weight:900;
+            box-shadow: 0 8px 18px rgba(234,88,12,.25);
+          }
+          #__d365_fetch_builder .fb-title-main { font-size:16px; font-weight:900; }
+          #__d365_fetch_builder .fb-title-sub { font-size:11px; color:#64748b; margin-top:2px; }
+          #__d365_fetch_builder .fb-header-actions { display:flex; gap:8px; align-items:center; }
+          #__d365_fetch_builder button,
+          #__d365_fetch_builder input,
+          #__d365_fetch_builder select,
+          #__d365_fetch_builder textarea { font: inherit; }
+          #__d365_fetch_builder .fb-btn {
+            border: 1px solid #cbd5e1;
+            background: #fff;
+            color: #0f172a;
+            border-radius: 9px;
+            padding: 8px 11px;
+            font-weight: 750;
+            cursor: pointer;
+            transition: .15s ease;
+            white-space: nowrap;
+          }
+          #__d365_fetch_builder .fb-btn:hover { background:#f1f5f9; transform:translateY(-1px); }
+          #__d365_fetch_builder .fb-btn:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+          #__d365_fetch_builder .fb-btn-primary { background:#2563eb; color:#fff; border-color:#2563eb; }
+          #__d365_fetch_builder .fb-btn-primary:hover { background:#1d4ed8; }
+          #__d365_fetch_builder .fb-btn-success { background:#16a34a; color:#fff; border-color:#16a34a; }
+          #__d365_fetch_builder .fb-btn-danger { color:#b91c1c; border-color:#fecaca; background:#fff; }
+          #__d365_fetch_builder .fb-btn-ghost { border-color:transparent; background:transparent; }
+          #__d365_fetch_builder .fb-btn-small { padding:5px 8px; font-size:12px; border-radius:7px; }
+          #__d365_fetch_builder .fb-tabs {
+            height: 43px; padding:0 18px; background:#fff; border-bottom:1px solid #e2e8f0;
+            display:flex; align-items:flex-end; gap:4px; flex:0 0 auto;
+          }
+          #__d365_fetch_builder .fb-tab {
+            border:none; background:transparent; cursor:pointer; padding:11px 14px 10px;
+            font-weight:800; color:#64748b; border-bottom:3px solid transparent;
+          }
+          #__d365_fetch_builder .fb-tab.active { color:#2563eb; border-bottom-color:#2563eb; }
+          #__d365_fetch_builder .fb-main { flex:1; min-height:0; display:flex; }
+          #__d365_fetch_builder .fb-page { display:none; width:100%; height:100%; min-height:0; }
+          #__d365_fetch_builder .fb-page.active { display:flex; }
+          #__d365_fetch_builder .fb-builder-layout { display:grid; grid-template-columns:310px minmax(560px,1fr) 340px; width:100%; min-height:0; }
+          #__d365_fetch_builder .fb-panel { min-width:0; min-height:0; background:#fff; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; }
+          #__d365_fetch_builder .fb-panel:last-child { border-right:none; }
+          #__d365_fetch_builder .fb-panel-head { padding:13px 14px 10px; border-bottom:1px solid #e2e8f0; flex:0 0 auto; }
+          #__d365_fetch_builder .fb-panel-title { font-weight:900; font-size:13px; }
+          #__d365_fetch_builder .fb-panel-sub { color:#64748b; font-size:11px; margin-top:3px; }
+          #__d365_fetch_builder .fb-panel-body { padding:12px; overflow:auto; flex:1; min-height:0; }
+          #__d365_fetch_builder .fb-input,
+          #__d365_fetch_builder .fb-select,
+          #__d365_fetch_builder .fb-textarea {
+            width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:8px 10px;
+            background:#fff; color:#0f172a; outline:none;
+          }
+          #__d365_fetch_builder .fb-input:focus,
+          #__d365_fetch_builder .fb-select:focus,
+          #__d365_fetch_builder .fb-textarea:focus { border-color:#60a5fa; box-shadow:0 0 0 3px rgba(59,130,246,.12); }
+          #__d365_fetch_builder .fb-search { margin-bottom:10px; }
+          #__d365_fetch_builder .fb-list { border:1px solid #e2e8f0; border-radius:9px; overflow:auto; background:#fff; }
+          #__d365_fetch_builder .fb-entity-list { height:240px; }
+          #__d365_fetch_builder .fb-field-list { height:310px; }
+          #__d365_fetch_builder .fb-list-row {
+            display:flex; align-items:flex-start; gap:8px; padding:8px 9px; cursor:pointer;
+            border-bottom:1px solid #f1f5f9; font-size:12px;
+          }
+          #__d365_fetch_builder .fb-list-row:last-child { border-bottom:none; }
+          #__d365_fetch_builder .fb-list-row:hover { background:#f8fafc; }
+          #__d365_fetch_builder .fb-list-row.active { background:#eff6ff; color:#1d4ed8; }
+          #__d365_fetch_builder .fb-row-main { font-weight:750; line-height:1.25; }
+          #__d365_fetch_builder .fb-row-sub { color:#64748b; font-size:10px; margin-top:2px; word-break:break-all; }
+          #__d365_fetch_builder .fb-section { margin-bottom:16px; }
+          #__d365_fetch_builder .fb-section:last-child { margin-bottom:0; }
+          #__d365_fetch_builder .fb-section-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:7px; }
+          #__d365_fetch_builder .fb-section-title { font-size:12px; font-weight:900; }
+          #__d365_fetch_builder .fb-muted { color:#64748b; font-size:11px; }
+          #__d365_fetch_builder .fb-chip-wrap { display:flex; flex-wrap:wrap; gap:6px; }
+          #__d365_fetch_builder .fb-chip {
+            display:inline-flex; align-items:center; gap:5px; border:1px solid #bfdbfe; background:#eff6ff;
+            color:#1e40af; border-radius:999px; padding:5px 7px; font-size:11px; max-width:100%;
+          }
+          #__d365_fetch_builder .fb-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px; }
+          #__d365_fetch_builder .fb-chip button { border:none; background:transparent; cursor:pointer; color:inherit; padding:0 2px; font-weight:900; }
+          #__d365_fetch_builder .fb-workspace { background:#f8fafc; overflow:auto; padding:14px; }
+          #__d365_fetch_builder .fb-card { background:#fff; border:1px solid #dbe3ee; border-radius:12px; box-shadow:0 2px 8px rgba(15,23,42,.04); margin-bottom:12px; overflow:hidden; }
+          #__d365_fetch_builder .fb-card-head { padding:10px 12px; background:#f8fafc; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+          #__d365_fetch_builder .fb-card-title { font-weight:900; font-size:12px; }
+          #__d365_fetch_builder .fb-card-body { padding:11px 12px; }
+          #__d365_fetch_builder .fb-inline { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+          #__d365_fetch_builder .fb-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+          #__d365_fetch_builder .fb-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+          #__d365_fetch_builder .fb-label { display:block; font-size:10px; color:#64748b; font-weight:800; margin-bottom:4px; }
+          #__d365_fetch_builder .fb-filter-group { border:1px solid #cbd5e1; border-radius:10px; background:#fff; margin-top:8px; overflow:hidden; }
+          #__d365_fetch_builder .fb-filter-group-head { padding:7px 8px; background:#f8fafc; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+          #__d365_fetch_builder .fb-filter-items { padding:8px; display:grid; gap:7px; }
+          #__d365_fetch_builder .fb-condition { display:grid; grid-template-columns:minmax(160px,1.35fr) minmax(130px,.85fr) minmax(170px,1fr) auto; gap:7px; align-items:center; }
+          #__d365_fetch_builder .fb-link { border-left:4px solid #8b5cf6; }
+          #__d365_fetch_builder .fb-link-children { padding-left:18px; }
+          #__d365_fetch_builder .fb-empty { border:1px dashed #cbd5e1; border-radius:10px; padding:18px; text-align:center; color:#64748b; font-size:12px; background:#fff; }
+          #__d365_fetch_builder .fb-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+          #__d365_fetch_builder .fb-check { display:flex; align-items:center; gap:7px; font-size:12px; cursor:pointer; }
+          #__d365_fetch_builder .fb-status { padding:8px 10px; border-radius:8px; font-size:11px; background:#f1f5f9; color:#475569; }
+          #__d365_fetch_builder .fb-status.ok { background:#ecfdf5; color:#047857; }
+          #__d365_fetch_builder .fb-status.error { background:#fef2f2; color:#b91c1c; }
+          #__d365_fetch_builder .fb-xml-page.active { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:14px; overflow:hidden; }
+          #__d365_fetch_builder .fb-xml-column { min-width:0; min-height:0; display:flex; flex-direction:column; }
+          #__d365_fetch_builder .fb-xml-column .fb-textarea { flex:1; resize:none; font-family:Consolas,Monaco,'Courier New',monospace; font-size:12px; direction:ltr; text-align:left; }
+          #__d365_fetch_builder .fb-preview-page { flex-direction:column; padding:14px; gap:10px; overflow:hidden; }
+          #__d365_fetch_builder .fb-preview-toolbar { display:flex; justify-content:space-between; align-items:center; gap:10px; flex:0 0 auto; }
+          #__d365_fetch_builder .fb-table-wrap { flex:1; min-height:0; overflow:auto; background:#fff; border:1px solid #e2e8f0; border-radius:10px; }
+          #__d365_fetch_builder table { border-collapse:collapse; width:max-content; min-width:100%; font-size:11px; }
+          #__d365_fetch_builder th { position:sticky; top:0; background:#f1f5f9; z-index:1; text-align:left; font-weight:900; padding:8px; border-bottom:1px solid #cbd5e1; white-space:nowrap; }
+          #__d365_fetch_builder td { padding:7px 8px; border-bottom:1px solid #f1f5f9; white-space:nowrap; max-width:360px; overflow:hidden; text-overflow:ellipsis; }
+          #__d365_fetch_builder tr:hover td { background:#f8fafc; }
+          #__d365_fetch_builder .fb-toast { position:absolute; right:22px; bottom:22px; background:#0f172a; color:#fff; border-radius:9px; padding:10px 13px; font-size:12px; box-shadow:0 12px 30px rgba(15,23,42,.3); opacity:0; transform:translateY(8px); pointer-events:none; transition:.18s ease; }
+          #__d365_fetch_builder .fb-toast.show { opacity:1; transform:translateY(0); }
+          @media (max-width: 1120px) {
+            #__d365_fetch_builder .fb-builder-layout { grid-template-columns:280px 1fr; }
+            #__d365_fetch_builder .fb-properties { display:none; }
+          }
+        </style>
+        <div class="fb-shell">
+          <div class="fb-header">
+            <div class="fb-title">
+              <div class="fb-logo">F</div>
+              <div>
+                <div class="fb-title-main">Advanced FetchXML Builder</div>
+                <div class="fb-title-sub">Visual query designer for Dataverse</div>
+              </div>
+            </div>
+            <div class="fb-header-actions">
+              <button class="fb-btn" id="fbImportButton">Import XML</button>
+              <button class="fb-btn" id="fbCopyButton">Copy XML</button>
+              <button class="fb-btn fb-btn-success" id="fbRunButton">Run</button>
+              <button class="fb-btn" id="fbCloseButton">Close</button>
+            </div>
           </div>
+          <div class="fb-tabs">
+            <button class="fb-tab active" data-tab="builder">Builder</button>
+            <button class="fb-tab" data-tab="preview">Results</button>
+            <button class="fb-tab" data-tab="xml">XML / Import</button>
+          </div>
+          <div class="fb-main">
+            <div class="fb-page active" data-page="builder">
+              <div class="fb-builder-layout">
+                <aside class="fb-panel">
+                  <div class="fb-panel-head">
+                    <div class="fb-panel-title">Source</div>
+                    <div class="fb-panel-sub">Choose a table and columns</div>
+                  </div>
+                  <div class="fb-panel-body">
+                    <div class="fb-section">
+                      <div class="fb-section-head"><div class="fb-section-title">Table</div></div>
+                      <input class="fb-input fb-search" id="fbEntitySearch" placeholder="Search display or logical name">
+                      <div class="fb-list fb-entity-list" id="fbEntityList"></div>
+                    </div>
+                    <div class="fb-section">
+                      <div class="fb-section-head">
+                        <div class="fb-section-title">Columns</div>
+                        <div class="fb-muted" id="fbColumnCount">0 selected</div>
+                      </div>
+                      <input class="fb-input fb-search" id="fbFieldSearch" placeholder="Search columns">
+                      <div class="fb-list fb-field-list" id="fbFieldList"></div>
+                    </div>
+                  </div>
+                </aside>
 
-          <div style="display:grid;gap:8px;">
-            <label style="font-weight:800;">Columns</label>
-            <input id="fbFieldSearch" placeholder="Search fields by display name / schema / logical name"
-              style="border:1px solid #cbd5e1;border-radius:10px;padding:10px;" />
+                <main class="fb-workspace" id="fbWorkspace"></main>
 
-            <div id="fbColumnsSelect"
-              style="border:1px solid #cbd5e1;border-radius:10px;padding:8px;height:180px;overflow:auto;display:grid;gap:6px;">
+                <aside class="fb-panel fb-properties">
+                  <div class="fb-panel-head">
+                    <div class="fb-panel-title">Query settings</div>
+                    <div class="fb-panel-sub">Fetch options and output</div>
+                  </div>
+                  <div class="fb-panel-body">
+                    <div class="fb-section">
+                      <div class="fb-section-title" style="margin-bottom:8px">Options</div>
+                      <div class="fb-options">
+                        <div>
+                          <label class="fb-label">Top</label>
+                          <input class="fb-input" id="fbTop" type="number" min="1" max="5000" value="50">
+                        </div>
+                        <div>
+                          <label class="fb-label">Primary alias</label>
+                          <input class="fb-input" id="fbPrimaryAlias" placeholder="optional">
+                        </div>
+                      </div>
+                      <div style="display:grid;gap:7px;margin-top:10px">
+                        <label class="fb-check"><input type="checkbox" id="fbDistinct"> Distinct</label>
+                        <label class="fb-check"><input type="checkbox" id="fbNoLock"> No lock</label>
+                        <label class="fb-check"><input type="checkbox" id="fbCount"> Return total record count</label>
+                      </div>
+                    </div>
+                    <div class="fb-section">
+                      <div class="fb-section-head">
+                        <div class="fb-section-title">Selected columns</div>
+                        <button class="fb-btn fb-btn-small" id="fbClearColumns">Clear</button>
+                      </div>
+                      <div class="fb-chip-wrap" id="fbSelectedColumnChips"></div>
+                    </div>
+                    <div class="fb-section">
+                      <div class="fb-section-title" style="margin-bottom:7px">Generated XML</div>
+                      <textarea class="fb-textarea" id="fbMiniOutput" readonly style="height:250px;font-family:Consolas,monospace;font-size:10px;resize:vertical"></textarea>
+                    </div>
+                    <div class="fb-status" id="fbStatus">Loading metadata...</div>
+                  </div>
+                </aside>
+              </div>
             </div>
 
-            <div id="fbSelectedColumns" style="font-size:12px;color:#475569;">
-              Selected: 0
+            <div class="fb-page fb-preview-page" data-page="preview">
+              <div class="fb-preview-toolbar">
+                <div>
+                  <div style="font-weight:900">Query results</div>
+                  <div class="fb-muted" id="fbResultSummary">Run the query to preview data.</div>
+                </div>
+                <div class="fb-inline">
+                  <button class="fb-btn" id="fbExportCsv">Export CSV</button>
+                  <button class="fb-btn fb-btn-success" id="fbRunAgain">Run query</button>
+                </div>
+              </div>
+              <div class="fb-table-wrap" id="fbResultTable"><div class="fb-empty" style="margin:16px">No results yet.</div></div>
+            </div>
+
+            <div class="fb-page fb-xml-page" data-page="xml">
+              <div class="fb-xml-column">
+                <div class="fb-section-head" style="padding-left:0;padding-right:0">
+                  <div>
+                    <div class="fb-panel-title">Generated FetchXML</div>
+                    <div class="fb-panel-sub">Updates automatically</div>
+                  </div>
+                  <button class="fb-btn fb-btn-small" id="fbCopyXmlTab">Copy</button>
+                </div>
+                <textarea class="fb-textarea" id="fbOutput" readonly></textarea>
+              </div>
+              <div class="fb-xml-column">
+                <div class="fb-section-head" style="padding-left:0;padding-right:0">
+                  <div>
+                    <div class="fb-panel-title">Import FetchXML</div>
+                    <div class="fb-panel-sub">Paste an existing query and rebuild it visually</div>
+                  </div>
+                  <button class="fb-btn fb-btn-primary fb-btn-small" id="fbParseImport">Parse and load</button>
+                </div>
+                <textarea class="fb-textarea" id="fbImportInput" placeholder="Paste FetchXML here..."></textarea>
+              </div>
             </div>
           </div>
-
-          <div style="grid-column:1 / -1;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <label style="font-weight:800;">Filter type:</label>
-
-            <select id="fbFilterType" style="border:1px solid #cbd5e1;border-radius:10px;padding:8px;">
-              <option value="and">AND</option>
-              <option value="or">OR</option>
-            </select>
-
-            <button id="fbAddCondition"
-              style="border:none;background:#2563eb;color:#fff;border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;">
-              + Add condition
-            </button>
-
-            <button id="fbGenerate"
-              style="border:none;background:#16a34a;color:#fff;border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;">
-              Generate FetchXML
-            </button>
-
-            <button id="fbCopy"
-              style="border:1px solid #cbd5e1;background:#fff;border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;">
-              Copy
-            </button>
-          </div>
-
-          <div style="grid-column:1 / -1;">
-            <div style="font-weight:800;margin-bottom:8px;">Conditions</div>
-            <div id="fbConditions" style="display:grid;gap:10px;"></div>
-          </div>
-
-          <div style="grid-column:1 / -1;">
-            <label style="font-weight:800;">FetchXML</label>
-            <textarea id="fbOutput" readonly
-              style="margin-top:8px;width:100%;height:260px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:10px;padding:10px;font-family:Consolas,Monaco,'Courier New',monospace;font-size:12px;direction:ltr;text-align:left;"></textarea>
-          </div>
+          <div class="fb-toast" id="fbToast"></div>
         </div>
       `;
 
-      overlay.appendChild(box);
       document.body.appendChild(overlay);
-
-      const $ = (selector) => box.querySelector(selector);
+      const shell = overlay.querySelector(".fb-shell");
+      const $ = (selector) => shell.querySelector(selector);
+      const $$ = (selector) => [...shell.querySelectorAll(selector)];
 
       const entitySearch = $("#fbEntitySearch");
-      const entitySelect = $("#fbEntitySelect");
+      const entityList = $("#fbEntityList");
       const fieldSearch = $("#fbFieldSearch");
-      const columnsSelect = $("#fbColumnsSelect");
-      const selectedColumnsLabel = $("#fbSelectedColumns");
-      const conditionsWrap = $("#fbConditions");
+      const fieldList = $("#fbFieldList");
+      const workspace = $("#fbWorkspace");
       const output = $("#fbOutput");
+      const miniOutput = $("#fbMiniOutput");
+      const importInput = $("#fbImportInput");
+      const status = $("#fbStatus");
+      const resultTable = $("#fbResultTable");
+      const resultSummary = $("#fbResultSummary");
+      const selectedColumnChips = $("#fbSelectedColumnChips");
+      const columnCount = $("#fbColumnCount");
 
-      $("#fbClose").onclick = () => overlay.remove();
+      let toastTimer = null;
+      const toast = (message) => {
+        const el = $("#fbToast");
+        el.textContent = message;
+        el.classList.add("show");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => el.classList.remove("show"), 1800);
+      };
+
+      const setStatus = (message, type = "") => {
+        status.textContent = message;
+        status.className = `fb-status${type ? ` ${type}` : ""}`;
+      };
+
+      const setTab = (tab) => {
+        state.activeTab = tab;
+        $$(".fb-tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
+        $$(".fb-page").forEach((page) => page.classList.toggle("active", page.dataset.page === tab));
+      };
+
+      const getEntity = (logicalName) => state.entities.find((item) => item.logicalName === logicalName);
+      const getField = (logicalName, entityLogicalName = state.entity?.logicalName) =>
+        metadataCache.get(entityLogicalName)?.fields?.find((field) => field.logicalName === logicalName);
 
       const getOperatorsByType = (type) => {
         const t = String(type || "").toLowerCase();
+        const commonEmpty = [["null", "Is empty"], ["not-null", "Is not empty"]];
 
         if (t.includes("string") || t.includes("memo")) {
           return [
-            ["eq", "Equals"],
-            ["ne", "Not Equals"],
-            ["like", "Contains"],
-            ["not-like", "Does Not Contain"],
-            ["null", "Is Empty"],
-            ["not-null", "Is Not Empty"]
+            ["eq", "Equals"], ["ne", "Not equals"], ["like", "Contains"],
+            ["not-like", "Does not contain"], ["begins-with", "Begins with"],
+            ["not-begin-with", "Does not begin with"], ["ends-with", "Ends with"],
+            ["not-end-with", "Does not end with"], ["in", "In"], ["not-in", "Not in"],
+            ...commonEmpty
           ];
         }
 
         if (t.includes("datetime")) {
           return [
-            ["on", "On"],
-            ["on-or-after", "On Or After"],
-            ["on-or-before", "On Or Before"],
-            ["last-x-days", "Last X Days"],
-            ["next-x-days", "Next X Days"],
-            ["null", "Is Empty"],
-            ["not-null", "Is Not Empty"]
-          ];
-        }
-
-        if (
-          t.includes("picklist") ||
-          t.includes("state") ||
-          t.includes("status") ||
-          t.includes("boolean")
-        ) {
-          return [
-            ["eq", "Equals"],
-            ["ne", "Not Equals"],
-            ["null", "Is Empty"],
-            ["not-null", "Is Not Empty"]
-          ];
-        }
-
-        if (
-          t.includes("integer") ||
-          t.includes("decimal") ||
-          t.includes("double") ||
-          t.includes("money")
-        ) {
-          return [
-            ["eq", "Equals"],
-            ["ne", "Not Equals"],
-            ["gt", "Greater Than"],
-            ["ge", "Greater Or Equal"],
-            ["lt", "Less Than"],
-            ["le", "Less Or Equal"],
-            ["null", "Is Empty"],
-            ["not-null", "Is Not Empty"]
+            ["on", "On"], ["on-or-after", "On or after"], ["on-or-before", "On or before"],
+            ["today", "Today"], ["yesterday", "Yesterday"], ["tomorrow", "Tomorrow"],
+            ["last-seven-days", "Last 7 days"], ["next-seven-days", "Next 7 days"],
+            ["last-x-days", "Last X days"], ["next-x-days", "Next X days"],
+            ["last-x-months", "Last X months"], ["next-x-months", "Next X months"],
+            ["olderthan-x-days", "Older than X days"], ...commonEmpty
           ];
         }
 
         if (t.includes("lookup") || t.includes("customer") || t.includes("owner")) {
           return [
-            ["eq", "Equals GUID"],
-            ["ne", "Not Equals GUID"],
-            ["eq-userid", "Current User"],
-            ["null", "Is Empty"],
-            ["not-null", "Is Not Empty"]
+            ["eq", "Equals GUID"], ["ne", "Not equals GUID"], ["eq-userid", "Current user"],
+            ["ne-userid", "Not current user"], ["eq-userteams", "Current user's teams"],
+            ["in", "In"], ["not-in", "Not in"], ...commonEmpty
           ];
         }
 
-        return [
-          ["eq", "Equals"],
-          ["ne", "Not Equals"],
-          ["null", "Is Empty"],
-          ["not-null", "Is Not Empty"]
-        ];
-      };
-
-      const renderEntities = () => {
-        const q = entitySearch.value.trim().toLowerCase();
-        entitySelect.innerHTML = "";
-
-        state.entities
-          .filter((e) => {
-            const text = `${e.label} ${e.logicalName} ${e.schemaName}`.toLowerCase();
-            return !q || text.includes(q);
-          })
-          .sort((a, b) =>
-            (a.label || a.logicalName).localeCompare(b.label || b.logicalName)
-          )
-          .forEach((e) => {
-            const opt = document.createElement("option");
-            opt.value = e.logicalName;
-            opt.textContent = `${e.label || e.logicalName} (${e.logicalName})`;
-            entitySelect.appendChild(opt);
-          });
-      };
-
-      const renderFields = () => {
-        const q = fieldSearch.value.trim().toLowerCase();
-        columnsSelect.innerHTML = "";
-
-        const filtered = state.fields
-          .filter((f) => {
-            const text = `${f.label} ${f.logicalName} ${f.schemaName}`.toLowerCase();
-            return !q || text.includes(q);
-          })
-          .sort((a, b) =>
-            (a.label || a.logicalName).localeCompare(b.label || b.logicalName)
-          );
-
-        filtered.forEach((f) => {
-          const row = document.createElement("label");
-          row.style.cssText = `
-            display:flex;
-            align-items:center;
-            gap:8px;
-            cursor:pointer;
-            padding:6px;
-            border-radius:8px;
-            font-size:13px;
-          `;
-
-          row.onmouseenter = () => (row.style.background = "#f8fafc");
-          row.onmouseleave = () => (row.style.background = "");
-
-          const cb = document.createElement("input");
-          cb.type = "checkbox";
-          cb.checked = state.selectedColumns.includes(f.logicalName);
-
-          cb.onchange = () => {
-            if (cb.checked) {
-              if (!state.selectedColumns.includes(f.logicalName)) {
-                state.selectedColumns.push(f.logicalName);
-              }
-            } else {
-              state.selectedColumns = state.selectedColumns.filter(
-                (x) => x !== f.logicalName
-              );
-            }
-
-            selectedColumnsLabel.textContent = `Selected: ${state.selectedColumns.length}`;
-          };
-
-          const text = document.createElement("span");
-          text.textContent = `${f.label || f.logicalName} (${f.logicalName})`;
-
-          row.appendChild(cb);
-          row.appendChild(text);
-          columnsSelect.appendChild(row);
-        });
-
-        selectedColumnsLabel.textContent = `Selected: ${state.selectedColumns.length}`;
-      };
-
-      const getField = (logicalName) =>
-        state.fields.find((f) => f.logicalName === logicalName);
-
-      const renderConditions = () => {
-        conditionsWrap.innerHTML = "";
-
-        state.conditions.forEach((condition, index) => {
-          const row = document.createElement("div");
-          row.style.cssText = `
-            display:grid;
-            grid-template-columns: 1.3fr .8fr 1.2fr auto;
-            gap:8px;
-            align-items:center;
-          `;
-
-          const fieldSelect = document.createElement("select");
-          fieldSelect.style.cssText =
-            "border:1px solid #cbd5e1;border-radius:10px;padding:8px;";
-
-          state.fields
-            .sort((a, b) =>
-              (a.label || a.logicalName).localeCompare(b.label || b.logicalName)
-            )
-            .forEach((f) => {
-              const opt = document.createElement("option");
-              opt.value = f.logicalName;
-              opt.textContent = `${f.label || f.logicalName} (${f.logicalName})`;
-              if (condition.field === f.logicalName) opt.selected = true;
-              fieldSelect.appendChild(opt);
-            });
-
-          const operatorSelect = document.createElement("select");
-          operatorSelect.style.cssText =
-            "border:1px solid #cbd5e1;border-radius:10px;padding:8px;";
-
-          const selectedField = getField(condition.field);
-          const operators = getOperatorsByType(selectedField?.type);
-
-          operators.forEach(([value, label]) => {
-            const opt = document.createElement("option");
-            opt.value = value;
-            opt.textContent = label;
-            if (condition.operator === value) opt.selected = true;
-            operatorSelect.appendChild(opt);
-          });
-
-          const valueWrap = document.createElement("div");
-
-          const renderValueInput = () => {
-            valueWrap.innerHTML = "";
-
-            const field = getField(condition.field);
-            const operator = condition.operator;
-
-            if (operator === "null" || operator === "not-null" || operator === "eq-userid") {
-              const span = document.createElement("span");
-              span.textContent = "No value needed";
-              span.style.cssText = "color:#64748b;font-size:13px;";
-              valueWrap.appendChild(span);
-              return;
-            }
-
-            if (field?.options?.length) {
-              const select = document.createElement("select");
-              select.style.cssText =
-                "width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:8px;";
-
-              field.options.forEach((o) => {
-                const opt = document.createElement("option");
-                opt.value = o.value;
-                opt.textContent = `${o.label} (${o.value})`;
-                if (String(condition.value) === String(o.value)) opt.selected = true;
-                select.appendChild(opt);
-              });
-
-              select.onchange = () => {
-                condition.value = select.value;
-              };
-
-              valueWrap.appendChild(select);
-
-              if (!condition.value && field.options[0]) {
-                condition.value = field.options[0].value;
-              }
-
-              return;
-            }
-
-            const input = document.createElement("input");
-            input.value = condition.value || "";
-            input.placeholder = "Value";
-            input.style.cssText =
-              "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:10px;padding:8px;";
-
-            if (String(field?.type || "").toLowerCase().includes("datetime")) {
-              input.type = "date";
-            }
-
-            input.oninput = () => {
-              condition.value = input.value;
-            };
-
-            valueWrap.appendChild(input);
-          };
-
-          const removeBtn = document.createElement("button");
-          removeBtn.textContent = "Remove";
-          removeBtn.style.cssText = `
-            border:1px solid #fecaca;
-            background:#fff;
-            color:#b91c1c;
-            border-radius:10px;
-            padding:8px 10px;
-            font-weight:700;
-            cursor:pointer;
-          `;
-
-          fieldSelect.onchange = () => {
-            condition.field = fieldSelect.value;
-            condition.operator = "eq";
-            condition.value = "";
-            renderConditions();
-          };
-
-          operatorSelect.onchange = () => {
-            condition.operator = operatorSelect.value;
-            condition.value = "";
-            renderConditions();
-          };
-
-          removeBtn.onclick = () => {
-            state.conditions.splice(index, 1);
-            renderConditions();
-          };
-
-          row.appendChild(fieldSelect);
-          row.appendChild(operatorSelect);
-          row.appendChild(valueWrap);
-          row.appendChild(removeBtn);
-
-          conditionsWrap.appendChild(row);
-          renderValueInput();
-        });
-      };
-
-      const loadEntities = async () => {
-        entitySelect.innerHTML = "<option>Loading entities...</option>";
-
-        const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
-
-        const rows = await fetchAll(
-          `${clientUrl}/api/data/v9.2/EntityDefinitions?$select=LogicalName,SchemaName,DisplayName,ObjectTypeCode&$filter=IsPrivate eq false`
-        );
-
-        state.entities = rows.map((e) => ({
-          logicalName: e.LogicalName,
-          schemaName: e.SchemaName,
-          label: getLabel(e.DisplayName, e.LogicalName)
-        }));
-
-        renderEntities();
-      };
-
-      const loadOptionsForField = async (entityLogicalName, field) => {
-        const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
-
-        const type = String(field.type || "").toLowerCase();
-
-        let cast = null;
-
-        if (type.includes("picklist")) {
-          cast = "Microsoft.Dynamics.CRM.PicklistAttributeMetadata";
-        } else if (type.includes("status")) {
-          cast = "Microsoft.Dynamics.CRM.StatusAttributeMetadata";
-        } else if (type.includes("state")) {
-          cast = "Microsoft.Dynamics.CRM.StateAttributeMetadata";
-        } else if (type.includes("boolean")) {
-          cast = "Microsoft.Dynamics.CRM.BooleanAttributeMetadata";
+        if (t.includes("integer") || t.includes("decimal") || t.includes("double") || t.includes("money") || t.includes("bigint")) {
+          return [
+            ["eq", "Equals"], ["ne", "Not equals"], ["gt", "Greater than"],
+            ["ge", "Greater or equal"], ["lt", "Less than"], ["le", "Less or equal"],
+            ["between", "Between"], ["not-between", "Not between"], ["in", "In"], ["not-in", "Not in"],
+            ...commonEmpty
+          ];
         }
 
-        if (!cast) return;
+        return [["eq", "Equals"], ["ne", "Not equals"], ["in", "In"], ["not-in", "Not in"], ...commonEmpty];
+      };
+
+      const operatorNeedsNoValue = (operator) => [
+        "null", "not-null", "eq-userid", "ne-userid", "eq-userteams",
+        "today", "yesterday", "tomorrow", "last-seven-days", "next-seven-days"
+      ].includes(operator);
+
+      const operatorNeedsMultipleValues = (operator) => ["in", "not-in", "between", "not-between"].includes(operator);
+
+      const loadEntities = async () => {
+        const url = `${clientUrl}/api/data/${API_VERSION}/EntityDefinitions?$select=LogicalName,SchemaName,DisplayName,EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute,IsActivity,IsCustomEntity&$filter=IsPrivate eq false`;
+        const rows = await fetchAll(url);
+
+        state.entities = rows
+          .filter((row) => row.LogicalName && row.EntitySetName)
+          .map((row) => ({
+            logicalName: row.LogicalName,
+            schemaName: row.SchemaName,
+            label: getLabel(row.DisplayName, row.LogicalName),
+            entitySetName: row.EntitySetName,
+            primaryIdAttribute: row.PrimaryIdAttribute,
+            primaryNameAttribute: row.PrimaryNameAttribute,
+            isActivity: row.IsActivity,
+            isCustomEntity: row.IsCustomEntity
+          }))
+          .sort((a, b) => (a.label || a.logicalName).localeCompare(b.label || b.logicalName));
+
+        renderEntities();
+        setStatus(`${state.entities.length} tables loaded`, "ok");
+      };
+
+      const loadOptionSet = async (entityLogicalName, field) => {
+        const key = `${entityLogicalName}:${field.logicalName}`;
+        if (optionCache.has(key)) return optionCache.get(key);
+
+        const type = String(field.type || "").toLowerCase();
+        let cast = null;
+        if (type.includes("picklist") || type.includes("multiselectpicklist")) cast = "Microsoft.Dynamics.CRM.PicklistAttributeMetadata";
+        else if (type.includes("status")) cast = "Microsoft.Dynamics.CRM.StatusAttributeMetadata";
+        else if (type.includes("state")) cast = "Microsoft.Dynamics.CRM.StateAttributeMetadata";
+        else if (type.includes("boolean")) cast = "Microsoft.Dynamics.CRM.BooleanAttributeMetadata";
+        if (!cast) return [];
 
         try {
-          const url =
-            `${clientUrl}/api/data/v9.2/EntityDefinitions(LogicalName='${entityLogicalName}')` +
-            `/Attributes(LogicalName='${field.logicalName}')/${cast}?$expand=OptionSet`;
-
-          const res = await fetch(url, {
-            headers: {
-              Accept: "application/json",
-              "OData-MaxVersion": "4.0",
-              "OData-Version": "4.0"
-            }
-          });
-
-          const data = await res.json();
-
-          if (!res.ok) return;
+          const url = `${clientUrl}/api/data/${API_VERSION}/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes(LogicalName='${field.logicalName}')/${cast}?$expand=OptionSet`;
+          const data = await requestJson(url);
+          let options = [];
 
           if (type.includes("boolean")) {
-            const trueOption = data.OptionSet?.TrueOption;
-            const falseOption = data.OptionSet?.FalseOption;
-
-            field.options = [
-              {
-                value: falseOption?.Value ?? 0,
-                label: getLabel(falseOption?.Label, "No")
-              },
-              {
-                value: trueOption?.Value ?? 1,
-                label: getLabel(trueOption?.Label, "Yes")
-              }
+            const trueOption = data?.OptionSet?.TrueOption;
+            const falseOption = data?.OptionSet?.FalseOption;
+            options = [
+              { value: falseOption?.Value ?? 0, label: getLabel(falseOption?.Label, "No") },
+              { value: trueOption?.Value ?? 1, label: getLabel(trueOption?.Label, "Yes") }
             ];
           } else {
-            field.options = (data.OptionSet?.Options || []).map((o) => ({
-              value: o.Value,
-              label: getLabel(o.Label, String(o.Value))
+            options = (data?.OptionSet?.Options || []).map((option) => ({
+              value: option.Value,
+              label: getLabel(option.Label, String(option.Value))
             }));
           }
+
+          optionCache.set(key, options);
+          return options;
         } catch {
-          field.options = [];
+          optionCache.set(key, []);
+          return [];
         }
       };
 
       const loadFields = async (entityLogicalName) => {
-        columnsSelect.innerHTML = "Loading fields...";
-        conditionsWrap.innerHTML = "";
-        output.value = "";
+        if (metadataCache.has(entityLogicalName)) return metadataCache.get(entityLogicalName);
 
-        state.entity = entityLogicalName;
-        state.fields = [];
-        state.selectedColumns = [];
-        state.conditions = [];
-
-        selectedColumnsLabel.textContent = "Selected: 0";
-
-        const clientUrl = Xrm.Utility.getGlobalContext().getClientUrl();
-
-        const url =
-          `${clientUrl}/api/data/v9.2/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes` +
-          `?$select=LogicalName,SchemaName,DisplayName,AttributeType`;
-
+        const url = `${clientUrl}/api/data/${API_VERSION}/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes?$select=LogicalName,SchemaName,DisplayName,AttributeType,IsValidForRead,IsValidForAdvancedFind,IsPrimaryId,IsPrimaryName`;
         const attrs = await fetchAll(url);
+        const fields = attrs
+          .filter((attr) => attr.LogicalName && attr.IsValidForRead !== false && !attr.LogicalName.startsWith("_"))
+          .map((attr) => ({
+            logicalName: attr.LogicalName,
+            schemaName: attr.SchemaName,
+            label: getLabel(attr.DisplayName, attr.LogicalName),
+            type: attr.AttributeType,
+            isPrimaryId: attr.IsPrimaryId,
+            isPrimaryName: attr.IsPrimaryName,
+            isAdvancedFind: attr.IsValidForAdvancedFind,
+            options: null
+          }))
+          .sort((a, b) => (a.label || a.logicalName).localeCompare(b.label || b.logicalName));
 
-        state.fields = attrs
-          .filter(
-            (a) =>
-              a.LogicalName &&
-              !a.LogicalName.startsWith("_") &&
-              !a.LogicalName.includes("@")
-          )
-          .map((a) => ({
-            logicalName: a.LogicalName,
-            schemaName: a.SchemaName,
-            label: getLabel(a.DisplayName, a.LogicalName),
-            type: a.AttributeType,
-            options: []
-          }));
-
-        const optionFields = state.fields.filter((f) => {
-          const t = String(f.type || "").toLowerCase();
-          return (
-            t.includes("picklist") ||
-            t.includes("status") ||
-            t.includes("state") ||
-            t.includes("boolean")
-          );
-        });
-
-        await Promise.all(
-          optionFields.map((field) => loadOptionsForField(entityLogicalName, field))
-        );
-
-        renderFields();
+        const metadata = { fields };
+        metadataCache.set(entityLogicalName, metadata);
+        return metadata;
       };
 
-      const buildFetchXml = () => {
-        if (!state.entity) {
-          output.value = "Please select entity.";
+      const loadRelationships = async (entityLogicalName) => {
+        if (relationshipCache.has(entityLogicalName)) return relationshipCache.get(entityLogicalName);
+
+        const base = `${clientUrl}/api/data/${API_VERSION}/EntityDefinitions(LogicalName='${entityLogicalName}')`;
+        const [manyToOne, oneToMany] = await Promise.all([
+          fetchAll(`${base}/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,ReferencedAttribute`),
+          fetchAll(`${base}/OneToManyRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,ReferencedAttribute`)
+        ]);
+
+        const map = new Map();
+        const add = (relationship, direction) => {
+          let relatedEntity;
+          let from;
+          let to;
+
+          if (direction === "many-to-one") {
+            relatedEntity = relationship.ReferencedEntity;
+            from = relationship.ReferencedAttribute;
+            to = relationship.ReferencingAttribute;
+          } else {
+            relatedEntity = relationship.ReferencingEntity;
+            from = relationship.ReferencingAttribute;
+            to = relationship.ReferencedAttribute;
+          }
+
+          if (!relatedEntity || !from || !to || relatedEntity === entityLogicalName) return;
+          const key = `${relationship.SchemaName}:${direction}`;
+          map.set(key, {
+            id: key,
+            schemaName: relationship.SchemaName,
+            direction,
+            sourceEntity: entityLogicalName,
+            relatedEntity,
+            from,
+            to
+          });
+        };
+
+        manyToOne.forEach((item) => add(item, "many-to-one"));
+        oneToMany.forEach((item) => add(item, "one-to-many"));
+
+        const relationships = [...map.values()].sort((a, b) => {
+          const ea = getEntity(a.relatedEntity);
+          const eb = getEntity(b.relatedEntity);
+          return (ea?.label || a.relatedEntity).localeCompare(eb?.label || b.relatedEntity);
+        });
+
+        relationshipCache.set(entityLogicalName, relationships);
+        return relationships;
+      };
+
+      const selectEntity = async (logicalName, preserve = false) => {
+        const entity = getEntity(logicalName);
+        if (!entity) return;
+
+        setStatus(`Loading ${entity.label || entity.logicalName}...`);
+        state.entity = entity;
+        const metadata = await loadFields(logicalName);
+        state.fields = metadata.fields;
+
+        if (!preserve) {
+          state.selectedColumns = [];
+          state.rootFilter = defaultFilter();
+          state.orders = [];
+          state.links = [];
+        }
+
+        renderAll();
+        setStatus(`${state.fields.length} columns loaded`, "ok");
+      };
+
+      const renderEntities = () => {
+        const q = entitySearch.value.trim().toLowerCase();
+        const entities = state.entities.filter((entity) => {
+          const text = `${entity.label} ${entity.logicalName} ${entity.schemaName}`.toLowerCase();
+          return !q || text.includes(q);
+        });
+
+        entityList.innerHTML = entities.slice(0, 500).map((entity) => `
+          <div class="fb-list-row ${state.entity?.logicalName === entity.logicalName ? "active" : ""}" data-entity="${escapeHtml(entity.logicalName)}">
+            <div>
+              <div class="fb-row-main">${escapeHtml(entity.label || entity.logicalName)}</div>
+              <div class="fb-row-sub">${escapeHtml(entity.logicalName)}</div>
+            </div>
+          </div>
+        `).join("") || `<div class="fb-empty" style="margin:8px">No tables found.</div>`;
+
+        entityList.querySelectorAll("[data-entity]").forEach((row) => {
+          row.onclick = async () => {
+            try {
+              await selectEntity(row.dataset.entity);
+            } catch (error) {
+              setStatus(error.message || String(error), "error");
+            }
+          };
+        });
+      };
+
+      const renderFields = () => {
+        const q = fieldSearch.value.trim().toLowerCase();
+        const fields = state.fields.filter((field) => {
+          const text = `${field.label} ${field.logicalName} ${field.schemaName} ${field.type}`.toLowerCase();
+          return !q || text.includes(q);
+        });
+
+        fieldList.innerHTML = state.entity
+          ? fields.map((field) => {
+              const checked = state.selectedColumns.includes(field.logicalName);
+              return `
+                <label class="fb-list-row">
+                  <input type="checkbox" data-field="${escapeHtml(field.logicalName)}" ${checked ? "checked" : ""}>
+                  <div>
+                    <div class="fb-row-main">${escapeHtml(field.label || field.logicalName)}</div>
+                    <div class="fb-row-sub">${escapeHtml(field.logicalName)} · ${escapeHtml(field.type || "Unknown")}</div>
+                  </div>
+                </label>
+              `;
+            }).join("")
+          : `<div class="fb-empty" style="margin:8px">Select a table first.</div>`;
+
+        fieldList.querySelectorAll("[data-field]").forEach((checkbox) => {
+          checkbox.onchange = () => {
+            const name = checkbox.dataset.field;
+            if (checkbox.checked) {
+              if (!state.selectedColumns.includes(name)) state.selectedColumns.push(name);
+            } else {
+              state.selectedColumns = state.selectedColumns.filter((item) => item !== name);
+            }
+            renderSelectedColumns();
+            renderWorkspace();
+            updateXml();
+          };
+        });
+      };
+
+      const renderSelectedColumns = () => {
+        columnCount.textContent = `${state.selectedColumns.length} selected`;
+        selectedColumnChips.innerHTML = state.selectedColumns.map((name, index) => {
+          const field = getField(name);
+          return `
+            <div class="fb-chip">
+              <button title="Move left" data-move-column="${index}:up">‹</button>
+              <span title="${escapeHtml(name)}">${escapeHtml(field?.label || name)}</span>
+              <button title="Move right" data-move-column="${index}:down">›</button>
+              <button title="Remove" data-remove-column="${escapeHtml(name)}">×</button>
+            </div>
+          `;
+        }).join("") || `<span class="fb-muted">No columns selected.</span>`;
+
+        selectedColumnChips.querySelectorAll("[data-remove-column]").forEach((button) => {
+          button.onclick = () => {
+            state.selectedColumns = state.selectedColumns.filter((name) => name !== button.dataset.removeColumn);
+            renderFields();
+            renderSelectedColumns();
+            renderWorkspace();
+            updateXml();
+          };
+        });
+
+        selectedColumnChips.querySelectorAll("[data-move-column]").forEach((button) => {
+          button.onclick = () => {
+            const [indexText, direction] = button.dataset.moveColumn.split(":");
+            const index = Number(indexText);
+            const target = direction === "up" ? index - 1 : index + 1;
+            if (target < 0 || target >= state.selectedColumns.length) return;
+            [state.selectedColumns[index], state.selectedColumns[target]] = [state.selectedColumns[target], state.selectedColumns[index]];
+            renderSelectedColumns();
+            renderWorkspace();
+            updateXml();
+          };
+        });
+      };
+
+      const findFilterGroup = (group, id) => {
+        if (group.id === id) return group;
+        for (const item of group.items) {
+          if (item.kind === "group") {
+            const found = findFilterGroup(item, id);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+
+      const removeFilterItem = (group, itemId) => {
+        const index = group.items.findIndex((item) => item.id === itemId);
+        if (index >= 0) {
+          group.items.splice(index, 1);
+          return true;
+        }
+        return group.items.some((item) => item.kind === "group" && removeFilterItem(item, itemId));
+      };
+
+      const renderValueEditor = async (container, condition, entityLogicalName, onChange) => {
+        const field = getField(condition.field, entityLogicalName);
+        const operator = condition.operator;
+        container.innerHTML = "";
+
+        if (operatorNeedsNoValue(operator)) {
+          container.innerHTML = `<div class="fb-muted">No value required</div>`;
           return;
         }
 
-        const columns =
-          state.selectedColumns.length > 0
-            ? state.selectedColumns
-            : [state.fields[0]?.logicalName].filter(Boolean);
+        if (operatorNeedsMultipleValues(operator)) {
+          const input = document.createElement("input");
+          input.className = "fb-input";
+          input.placeholder = operator.includes("between") ? "value 1, value 2" : "comma-separated values";
+          input.value = condition.values?.length ? condition.values.join(", ") : condition.value || "";
+          input.oninput = () => {
+            condition.values = input.value.split(",").map((item) => item.trim()).filter(Boolean);
+            condition.value = "";
+            onChange();
+          };
+          container.appendChild(input);
+          return;
+        }
 
-        const attrsXml = columns
-          .map((name) => `    <attribute name="${escapeXml(name)}" />`)
-          .join("\n");
+        const type = String(field?.type || "").toLowerCase();
+        if (["picklist", "status", "state", "boolean", "multiselectpicklist"].some((token) => type.includes(token))) {
+          if (!field.options) field.options = await loadOptionSet(entityLogicalName, field);
+          if (field.options?.length) {
+            const select = document.createElement("select");
+            select.className = "fb-select";
+            select.innerHTML = `<option value="">Select value</option>` + field.options.map((option) =>
+              `<option value="${escapeHtml(option.value)}" ${String(condition.value) === String(option.value) ? "selected" : ""}>${escapeHtml(option.label)} (${escapeHtml(option.value)})</option>`
+            ).join("");
+            select.onchange = () => {
+              condition.value = select.value;
+              onChange();
+            };
+            container.appendChild(select);
+            return;
+          }
+        }
 
-        const conditionsXml = state.conditions
-          .filter((c) => c.field && c.operator)
-          .map((c) => {
-            if (["null", "not-null", "eq-userid"].includes(c.operator)) {
-              return `      <condition attribute="${escapeXml(c.field)}" operator="${escapeXml(c.operator)}" />`;
-            }
+        const input = document.createElement("input");
+        input.className = "fb-input";
+        input.value = condition.value ?? "";
+        input.placeholder = type.includes("lookup") || type.includes("owner") || type.includes("customer") ? "GUID" : "Value";
+        if (type.includes("datetime")) input.type = "date";
+        else if (["integer", "decimal", "double", "money", "bigint"].some((token) => type.includes(token))) input.type = "number";
+        input.oninput = () => {
+          condition.value = input.value;
+          onChange();
+        };
+        container.appendChild(input);
+      };
 
-            const value =
-              c.operator === "like" || c.operator === "not-like"
-                ? `%${c.value || ""}%`
-                : c.value || "";
+      const renderFilterGroup = (group, entityLogicalName, isRoot = false) => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "fb-filter-group";
+        wrapper.dataset.filterId = group.id;
+        wrapper.innerHTML = `
+          <div class="fb-filter-group-head">
+            <div class="fb-inline">
+              <strong style="font-size:11px">Filter group</strong>
+              <select class="fb-select" data-filter-type style="width:auto;padding:5px 8px">
+                <option value="and" ${group.type === "and" ? "selected" : ""}>AND</option>
+                <option value="or" ${group.type === "or" ? "selected" : ""}>OR</option>
+              </select>
+            </div>
+            <div class="fb-inline">
+              <button class="fb-btn fb-btn-small" data-add-condition>+ Condition</button>
+              <button class="fb-btn fb-btn-small" data-add-group>+ Group</button>
+              ${isRoot ? "" : `<button class="fb-btn fb-btn-small fb-btn-danger" data-remove-group>Remove</button>`}
+            </div>
+          </div>
+          <div class="fb-filter-items"></div>
+        `;
 
-            return `      <condition attribute="${escapeXml(c.field)}" operator="${escapeXml(c.operator)}" value="${escapeXml(value)}" />`;
-          })
-          .join("\n");
+        const itemsWrap = wrapper.querySelector(".fb-filter-items");
+        if (!group.items.length) itemsWrap.innerHTML = `<div class="fb-muted">No conditions.</div>`;
 
-        const filterXml = conditionsXml
-          ? `    <filter type="${escapeXml(state.filterType)}">
-${conditionsXml}
-    </filter>`
-          : "";
+        group.items.forEach((item) => {
+          if (item.kind === "group") {
+            itemsWrap.appendChild(renderFilterGroup(item, entityLogicalName, false));
+            return;
+          }
 
-        output.value = `<fetch top="50">
-  <entity name="${escapeXml(state.entity)}">
-${attrsXml}
-${filterXml}
+          const conditionRow = document.createElement("div");
+          conditionRow.className = "fb-condition";
+          const fields = metadataCache.get(entityLogicalName)?.fields || [];
+          const selectedField = getField(item.field, entityLogicalName);
+          const operators = getOperatorsByType(selectedField?.type);
+          if (!operators.some(([value]) => value === item.operator)) item.operator = operators[0]?.[0] || "eq";
+
+          conditionRow.innerHTML = `
+            <select class="fb-select" data-condition-field>
+              ${fields.map((field) => `<option value="${escapeHtml(field.logicalName)}" ${field.logicalName === item.field ? "selected" : ""}>${escapeHtml(field.label || field.logicalName)} (${escapeHtml(field.logicalName)})</option>`).join("")}
+            </select>
+            <select class="fb-select" data-condition-operator>
+              ${operators.map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === item.operator ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+            </select>
+            <div data-value-wrap></div>
+            <button class="fb-btn fb-btn-small fb-btn-danger" data-remove-condition>×</button>
+          `;
+
+          const rerender = () => {
+            renderWorkspace();
+            updateXml();
+          };
+
+          conditionRow.querySelector("[data-condition-field]").onchange = (event) => {
+            item.field = event.target.value;
+            item.operator = "eq";
+            item.value = "";
+            item.values = [];
+            rerender();
+          };
+
+          conditionRow.querySelector("[data-condition-operator]").onchange = (event) => {
+            item.operator = event.target.value;
+            item.value = "";
+            item.values = [];
+            rerender();
+          };
+
+          conditionRow.querySelector("[data-remove-condition]").onclick = () => {
+            removeFilterItem(group, item.id);
+            rerender();
+          };
+
+          itemsWrap.appendChild(conditionRow);
+          renderValueEditor(conditionRow.querySelector("[data-value-wrap]"), item, entityLogicalName, updateXml);
+        });
+
+        wrapper.querySelector("[data-filter-type]").onchange = (event) => {
+          group.type = event.target.value;
+          updateXml();
+        };
+
+        wrapper.querySelector("[data-add-condition]").onclick = () => {
+          const fields = metadataCache.get(entityLogicalName)?.fields || [];
+          group.items.push(defaultCondition(fields[0]?.logicalName || ""));
+          renderWorkspace();
+          updateXml();
+        };
+
+        wrapper.querySelector("[data-add-group]").onclick = () => {
+          const child = defaultFilter();
+          child.kind = "group";
+          group.items.push(child);
+          renderWorkspace();
+          updateXml();
+        };
+
+        wrapper.querySelector("[data-remove-group]")?.addEventListener("click", () => {
+          removeFilterItem(state.rootFilter, group.id);
+          state.links.forEach((link) => removeFilterItem(link.filter, group.id));
+          renderWorkspace();
+          updateXml();
+        });
+
+        return wrapper;
+      };
+
+      const renderOrders = () => {
+        const card = document.createElement("div");
+        card.className = "fb-card";
+        card.innerHTML = `
+          <div class="fb-card-head">
+            <div class="fb-card-title">Sort order</div>
+            <button class="fb-btn fb-btn-small" data-add-order>+ Add sort</button>
+          </div>
+          <div class="fb-card-body" data-order-list></div>
+        `;
+
+        const list = card.querySelector("[data-order-list]");
+        if (!state.orders.length) list.innerHTML = `<div class="fb-muted">No sort columns.</div>`;
+
+        state.orders.forEach((order, index) => {
+          const row = document.createElement("div");
+          row.className = "fb-grid-3";
+          row.style.marginBottom = "7px";
+          row.innerHTML = `
+            <select class="fb-select" data-order-field>
+              ${state.fields.map((field) => `<option value="${escapeHtml(field.logicalName)}" ${field.logicalName === order.field ? "selected" : ""}>${escapeHtml(field.label || field.logicalName)}</option>`).join("")}
+            </select>
+            <select class="fb-select" data-order-direction>
+              <option value="false" ${!order.descending ? "selected" : ""}>Ascending</option>
+              <option value="true" ${order.descending ? "selected" : ""}>Descending</option>
+            </select>
+            <div class="fb-inline">
+              <button class="fb-btn fb-btn-small" data-order-up>↑</button>
+              <button class="fb-btn fb-btn-small" data-order-down>↓</button>
+              <button class="fb-btn fb-btn-small fb-btn-danger" data-order-remove>Remove</button>
+            </div>
+          `;
+
+          row.querySelector("[data-order-field]").onchange = (event) => { order.field = event.target.value; updateXml(); };
+          row.querySelector("[data-order-direction]").onchange = (event) => { order.descending = event.target.value === "true"; updateXml(); };
+          row.querySelector("[data-order-remove]").onclick = () => { state.orders.splice(index, 1); renderWorkspace(); updateXml(); };
+          row.querySelector("[data-order-up]").onclick = () => {
+            if (index === 0) return;
+            [state.orders[index - 1], state.orders[index]] = [state.orders[index], state.orders[index - 1]];
+            renderWorkspace(); updateXml();
+          };
+          row.querySelector("[data-order-down]").onclick = () => {
+            if (index >= state.orders.length - 1) return;
+            [state.orders[index + 1], state.orders[index]] = [state.orders[index], state.orders[index + 1]];
+            renderWorkspace(); updateXml();
+          };
+          list.appendChild(row);
+        });
+
+        card.querySelector("[data-add-order]").onclick = () => {
+          if (!state.fields.length) return;
+          state.orders.push({ id: createId("order"), field: state.fields[0].logicalName, descending: false });
+          renderWorkspace();
+          updateXml();
+        };
+
+        return card;
+      };
+
+      const getLinksByParent = (parentId = null) => state.links.filter((link) => (link.parentId || null) === parentId);
+
+      const addLink = async (parentEntity, parentId = null) => {
+        const relationships = await loadRelationships(parentEntity);
+        if (!relationships.length) {
+          alert("No supported 1:N or N:1 relationships were found.");
+          return;
+        }
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = "position:absolute;inset:0;background:rgba(15,23,42,.35);display:grid;place-items:center;z-index:10;padding:20px";
+        dialog.innerHTML = `
+          <div style="width:min(720px,90vw);max-height:80vh;background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(15,23,42,.35);display:flex;flex-direction:column;overflow:hidden">
+            <div class="fb-card-head"><div class="fb-card-title">Add related table</div><button class="fb-btn fb-btn-small" data-close>Close</button></div>
+            <div style="padding:12px"><input class="fb-input" data-search placeholder="Search relationship or table"></div>
+            <div data-list style="overflow:auto;padding:0 12px 12px"></div>
+          </div>
+        `;
+        overlay.appendChild(dialog);
+
+        const list = dialog.querySelector("[data-list]");
+        const search = dialog.querySelector("[data-search]");
+        const render = () => {
+          const q = search.value.trim().toLowerCase();
+          const filtered = relationships.filter((relationship) => {
+            const entity = getEntity(relationship.relatedEntity);
+            return `${entity?.label} ${relationship.relatedEntity} ${relationship.schemaName}`.toLowerCase().includes(q);
+          });
+          list.innerHTML = filtered.map((relationship) => {
+            const entity = getEntity(relationship.relatedEntity);
+            return `
+              <div class="fb-list-row" data-relationship="${escapeHtml(relationship.id)}">
+                <div>
+                  <div class="fb-row-main">${escapeHtml(entity?.label || relationship.relatedEntity)} (${escapeHtml(relationship.relatedEntity)})</div>
+                  <div class="fb-row-sub">${escapeHtml(relationship.schemaName)} · ${escapeHtml(relationship.direction)} · from ${escapeHtml(relationship.from)} to ${escapeHtml(relationship.to)}</div>
+                </div>
+              </div>
+            `;
+          }).join("") || `<div class="fb-empty">No relationships found.</div>`;
+
+          list.querySelectorAll("[data-relationship]").forEach((row) => {
+            row.onclick = async () => {
+              const relationship = relationships.find((item) => item.id === row.dataset.relationship);
+              const metadata = await loadFields(relationship.relatedEntity);
+              const aliasBase = relationship.relatedEntity.replace(/[^a-z0-9_]/gi, "");
+              let alias = aliasBase;
+              let suffix = 2;
+              while (state.links.some((link) => link.alias === alias)) alias = `${aliasBase}${suffix++}`;
+
+              state.links.push({
+                id: createId("link"),
+                parentId,
+                entity: relationship.relatedEntity,
+                relationshipId: relationship.id,
+                relationshipSchema: relationship.schemaName,
+                from: relationship.from,
+                to: relationship.to,
+                alias,
+                linkType: "inner",
+                selectedColumns: [],
+                filter: defaultFilter(),
+                fields: metadata.fields
+              });
+              dialog.remove();
+              renderWorkspace();
+              updateXml();
+            };
+          });
+        };
+
+        search.oninput = render;
+        dialog.querySelector("[data-close]").onclick = () => dialog.remove();
+        dialog.onclick = (event) => { if (event.target === dialog) dialog.remove(); };
+        render();
+      };
+
+      const renderLinkCard = (link) => {
+        const entity = getEntity(link.entity);
+        const card = document.createElement("div");
+        card.className = "fb-card fb-link";
+        card.innerHTML = `
+          <div class="fb-card-head">
+            <div>
+              <div class="fb-card-title">Related: ${escapeHtml(entity?.label || link.entity)} <span class="fb-muted">(${escapeHtml(link.entity)})</span></div>
+              <div class="fb-row-sub">${escapeHtml(link.from)} → ${escapeHtml(link.to)}</div>
+            </div>
+            <div class="fb-inline">
+              <button class="fb-btn fb-btn-small" data-add-child>+ Child link</button>
+              <button class="fb-btn fb-btn-small fb-btn-danger" data-remove-link>Remove</button>
+            </div>
+          </div>
+          <div class="fb-card-body">
+            <div class="fb-grid-3">
+              <div><label class="fb-label">Alias</label><input class="fb-input" data-link-alias value="${escapeHtml(link.alias)}"></div>
+              <div><label class="fb-label">Join type</label><select class="fb-select" data-link-type><option value="inner" ${link.linkType === "inner" ? "selected" : ""}>Inner</option><option value="outer" ${link.linkType === "outer" ? "selected" : ""}>Outer</option></select></div>
+              <div><label class="fb-label">Relationship</label><input class="fb-input" value="${escapeHtml(link.relationshipSchema || "Custom")}" readonly></div>
+            </div>
+            <div style="margin-top:10px">
+              <label class="fb-label">Columns</label>
+              <select class="fb-select" data-link-column>
+                <option value="">Add a column...</option>
+                ${(link.fields || []).map((field) => `<option value="${escapeHtml(field.logicalName)}">${escapeHtml(field.label || field.logicalName)} (${escapeHtml(field.logicalName)})</option>`).join("")}
+              </select>
+              <div class="fb-chip-wrap" data-link-chips style="margin-top:7px"></div>
+            </div>
+            <div style="margin-top:10px" data-link-filter></div>
+            <div class="fb-link-children" data-link-children></div>
+          </div>
+        `;
+
+        const chips = card.querySelector("[data-link-chips]");
+        const renderChips = () => {
+          chips.innerHTML = link.selectedColumns.map((name) => {
+            const field = link.fields.find((item) => item.logicalName === name);
+            return `<div class="fb-chip"><span>${escapeHtml(field?.label || name)}</span><button data-remove-link-column="${escapeHtml(name)}">×</button></div>`;
+          }).join("") || `<span class="fb-muted">No columns selected.</span>`;
+          chips.querySelectorAll("[data-remove-link-column]").forEach((button) => {
+            button.onclick = () => {
+              link.selectedColumns = link.selectedColumns.filter((name) => name !== button.dataset.removeLinkColumn);
+              renderChips();
+              updateXml();
+            };
+          });
+        };
+
+        card.querySelector("[data-link-column]").onchange = (event) => {
+          const value = event.target.value;
+          if (value && !link.selectedColumns.includes(value)) link.selectedColumns.push(value);
+          event.target.value = "";
+          renderChips();
+          updateXml();
+        };
+        card.querySelector("[data-link-alias]").oninput = (event) => { link.alias = event.target.value.trim(); updateXml(); };
+        card.querySelector("[data-link-type]").onchange = (event) => { link.linkType = event.target.value; updateXml(); };
+        card.querySelector("[data-remove-link]").onclick = () => {
+          const ids = new Set([link.id]);
+          let changed = true;
+          while (changed) {
+            changed = false;
+            state.links.forEach((item) => {
+              if (item.parentId && ids.has(item.parentId) && !ids.has(item.id)) { ids.add(item.id); changed = true; }
+            });
+          }
+          state.links = state.links.filter((item) => !ids.has(item.id));
+          renderWorkspace();
+          updateXml();
+        };
+        card.querySelector("[data-add-child]").onclick = () => addLink(link.entity, link.id);
+        card.querySelector("[data-link-filter]").appendChild(renderFilterGroup(link.filter, link.entity, true));
+        const childrenWrap = card.querySelector("[data-link-children]");
+        getLinksByParent(link.id).forEach((child) => childrenWrap.appendChild(renderLinkCard(child)));
+        renderChips();
+        return card;
+      };
+
+      const renderWorkspace = () => {
+        workspace.innerHTML = "";
+        if (!state.entity) {
+          workspace.innerHTML = `<div class="fb-empty">Choose a table on the left to start building a query.</div>`;
+          return;
+        }
+
+        const overview = document.createElement("div");
+        overview.className = "fb-card";
+        overview.innerHTML = `
+          <div class="fb-card-head">
+            <div>
+              <div class="fb-card-title">${escapeHtml(state.entity.label || state.entity.logicalName)}</div>
+              <div class="fb-row-sub">${escapeHtml(state.entity.logicalName)} · ${state.selectedColumns.length} columns · ${state.links.length} links</div>
+            </div>
+            <button class="fb-btn fb-btn-primary fb-btn-small" data-add-root-link>+ Related table</button>
+          </div>
+          <div class="fb-card-body">
+            <div class="fb-muted">Select columns from the left. Add filters, sort rules, and related tables below.</div>
+          </div>
+        `;
+        overview.querySelector("[data-add-root-link]").onclick = () => addLink(state.entity.logicalName, null);
+        workspace.appendChild(overview);
+
+        const filterCard = document.createElement("div");
+        filterCard.className = "fb-card";
+        filterCard.innerHTML = `<div class="fb-card-head"><div class="fb-card-title">Main table filters</div></div><div class="fb-card-body"></div>`;
+        filterCard.querySelector(".fb-card-body").appendChild(renderFilterGroup(state.rootFilter, state.entity.logicalName, true));
+        workspace.appendChild(filterCard);
+        workspace.appendChild(renderOrders());
+
+        const linksCard = document.createElement("div");
+        linksCard.className = "fb-card";
+        linksCard.innerHTML = `<div class="fb-card-head"><div class="fb-card-title">Related tables</div><button class="fb-btn fb-btn-small" data-add-link>+ Add link</button></div><div class="fb-card-body" data-links></div>`;
+        linksCard.querySelector("[data-add-link]").onclick = () => addLink(state.entity.logicalName, null);
+        const linksWrap = linksCard.querySelector("[data-links]");
+        const rootLinks = getLinksByParent(null);
+        if (!rootLinks.length) linksWrap.innerHTML = `<div class="fb-muted">No related tables. Add a link-entity visually.</div>`;
+        rootLinks.forEach((link) => linksWrap.appendChild(renderLinkCard(link)));
+        workspace.appendChild(linksCard);
+      };
+
+      const buildConditionXml = (condition, indent) => {
+        if (!condition.field || !condition.operator) return "";
+        const attrs = [`attribute="${escapeXml(condition.field)}"`, `operator="${escapeXml(condition.operator)}"`];
+
+        if (operatorNeedsNoValue(condition.operator)) return `${indent}<condition ${attrs.join(" ")} />`;
+
+        if (operatorNeedsMultipleValues(condition.operator)) {
+          const values = (condition.values || []).filter((value) => value !== "");
+          if (!values.length) return `${indent}<condition ${attrs.join(" ")} />`;
+          return `${indent}<condition ${attrs.join(" ")}>
+${values.map((value) => `${indent}  <value>${escapeXml(value)}</value>`).join("\n")}
+${indent}</condition>`;
+        }
+
+        let value = condition.value ?? "";
+        if (["like", "not-like"].includes(condition.operator) && !String(value).includes("%")) value = `%${value}%`;
+        else if (["begins-with", "not-begin-with"].includes(condition.operator) && !String(value).includes("%")) value = `${value}%`;
+        else if (["ends-with", "not-end-with"].includes(condition.operator) && !String(value).includes("%")) value = `%${value}`;
+        if (["eq", "ne"].includes(condition.operator)) value = normalizeGuid(value) || value;
+        return `${indent}<condition ${attrs.join(" ")} value="${escapeXml(value)}" />`;
+      };
+
+      const buildFilterXml = (group, indent) => {
+        const parts = group.items.map((item) =>
+          item.kind === "group" ? buildFilterXml(item, `${indent}  `) : buildConditionXml(item, `${indent}  `)
+        ).filter(Boolean);
+        if (!parts.length) return "";
+        return `${indent}<filter type="${escapeXml(group.type || "and")}">
+${parts.join("\n")}
+${indent}</filter>`;
+      };
+
+      const buildLinkXml = (link, indent) => {
+        const attrs = [
+          `name="${escapeXml(link.entity)}"`,
+          `from="${escapeXml(link.from)}"`,
+          `to="${escapeXml(link.to)}"`,
+          `link-type="${escapeXml(link.linkType || "inner")}"`
+        ];
+        if (link.alias) attrs.push(`alias="${escapeXml(link.alias)}"`);
+
+        const body = [];
+        link.selectedColumns.forEach((name) => body.push(`${indent}  <attribute name="${escapeXml(name)}" />`));
+        const filterXml = buildFilterXml(link.filter, `${indent}  `);
+        if (filterXml) body.push(filterXml);
+        getLinksByParent(link.id).forEach((child) => body.push(buildLinkXml(child, `${indent}  `)));
+
+        if (!body.length) return `${indent}<link-entity ${attrs.join(" ")} />`;
+        return `${indent}<link-entity ${attrs.join(" ")}>
+${body.join("\n")}
+${indent}</link-entity>`;
+      };
+
+      const buildFetchXml = () => {
+        if (!state.entity) return "";
+        const fetchAttrs = [];
+        const top = Number(state.options.top);
+        if (Number.isFinite(top) && top > 0) fetchAttrs.push(`top="${Math.min(top, 5000)}"`);
+        if (state.options.distinct) fetchAttrs.push(`distinct="true"`);
+        if (state.options.noLock) fetchAttrs.push(`no-lock="true"`);
+        if (state.options.returnTotalRecordCount) fetchAttrs.push(`returntotalrecordcount="true"`);
+
+        const entityAttrs = [`name="${escapeXml(state.entity.logicalName)}"`];
+        const primaryAlias = $("#fbPrimaryAlias").value.trim();
+        if (primaryAlias) entityAttrs.push(`alias="${escapeXml(primaryAlias)}"`);
+
+        const body = [];
+        const columns = state.selectedColumns.length
+          ? state.selectedColumns
+          : [state.entity.primaryNameAttribute || state.entity.primaryIdAttribute].filter(Boolean);
+        columns.forEach((name) => body.push(`    <attribute name="${escapeXml(name)}" />`));
+        state.orders.forEach((order) => body.push(`    <order attribute="${escapeXml(order.field)}" descending="${order.descending ? "true" : "false"}" />`));
+        const rootFilterXml = buildFilterXml(state.rootFilter, "    ");
+        if (rootFilterXml) body.push(rootFilterXml);
+        getLinksByParent(null).forEach((link) => body.push(buildLinkXml(link, "    ")));
+
+        return `<fetch${fetchAttrs.length ? ` ${fetchAttrs.join(" ")}` : ""}>
+  <entity ${entityAttrs.join(" ")}>
+${body.join("\n")}
   </entity>
 </fetch>`;
       };
 
-      entitySearch.oninput = renderEntities;
-      fieldSearch.oninput = renderFields;
+      const updateXml = () => {
+        const xml = buildFetchXml();
+        output.value = xml;
+        miniOutput.value = xml;
+      };
 
-      entitySelect.onchange = async () => {
-        try {
-          await loadFields(entitySelect.value);
-        } catch (e) {
-          output.value = `Failed loading fields:\n${e.message || e}`;
+      const renderAll = () => {
+        renderEntities();
+        renderFields();
+        renderSelectedColumns();
+        renderWorkspace();
+        updateXml();
+      };
+
+      const parseFilterNode = (filterNode) => {
+        const group = defaultFilter();
+        group.type = filterNode.getAttribute("type") || "and";
+        group.items = [];
+
+        [...filterNode.children].forEach((child) => {
+          if (child.tagName === "filter") {
+            const nested = parseFilterNode(child);
+            nested.kind = "group";
+            group.items.push(nested);
+          } else if (child.tagName === "condition") {
+            const condition = defaultCondition(child.getAttribute("attribute") || "");
+            condition.operator = child.getAttribute("operator") || "eq";
+            condition.value = child.getAttribute("value") || "";
+            condition.values = [...child.querySelectorAll(":scope > value")].map((node) => node.textContent || "");
+            group.items.push(condition);
+          }
+        });
+
+        return group;
+      };
+
+      const parseLinkNode = async (node, parentId = null) => {
+        const entityName = node.getAttribute("name");
+        if (!entityName) return;
+        const metadata = await loadFields(entityName);
+        const link = {
+          id: createId("link"),
+          parentId,
+          entity: entityName,
+          relationshipId: "",
+          relationshipSchema: "Imported",
+          from: node.getAttribute("from") || "",
+          to: node.getAttribute("to") || "",
+          alias: node.getAttribute("alias") || entityName,
+          linkType: node.getAttribute("link-type") || "inner",
+          selectedColumns: [...node.querySelectorAll(":scope > attribute")].map((attr) => attr.getAttribute("name")).filter(Boolean),
+          filter: node.querySelector(":scope > filter") ? parseFilterNode(node.querySelector(":scope > filter")) : defaultFilter(),
+          fields: metadata.fields
+        };
+        state.links.push(link);
+
+        for (const child of [...node.querySelectorAll(":scope > link-entity")]) {
+          await parseLinkNode(child, link.id);
         }
       };
 
-      $("#fbFilterType").onchange = (e) => {
-        state.filterType = e.target.value;
+      const importFetchXml = async () => {
+        const xml = importInput.value.trim();
+        if (!xml) return;
+        const doc = new DOMParser().parseFromString(xml, "application/xml");
+        const parserError = doc.querySelector("parsererror");
+        if (parserError) throw new Error("Invalid XML.");
+
+        const fetchNode = doc.querySelector("fetch");
+        const entityNode = fetchNode?.querySelector(":scope > entity");
+        const entityName = entityNode?.getAttribute("name");
+        if (!fetchNode || !entityNode || !entityName) throw new Error("FetchXML must contain fetch > entity.");
+
+        if (!getEntity(entityName)) throw new Error(`Table '${entityName}' was not found in this environment.`);
+        await selectEntity(entityName);
+
+        state.options.top = Number(fetchNode.getAttribute("top")) || 50;
+        state.options.distinct = fetchNode.getAttribute("distinct") === "true";
+        state.options.noLock = fetchNode.getAttribute("no-lock") === "true";
+        state.options.returnTotalRecordCount = fetchNode.getAttribute("returntotalrecordcount") === "true";
+        $("#fbTop").value = state.options.top;
+        $("#fbDistinct").checked = state.options.distinct;
+        $("#fbNoLock").checked = state.options.noLock;
+        $("#fbCount").checked = state.options.returnTotalRecordCount;
+        $("#fbPrimaryAlias").value = entityNode.getAttribute("alias") || "";
+
+        state.selectedColumns = [...entityNode.querySelectorAll(":scope > attribute")].map((attr) => attr.getAttribute("name")).filter(Boolean);
+        state.orders = [...entityNode.querySelectorAll(":scope > order")].map((order) => ({
+          id: createId("order"),
+          field: order.getAttribute("attribute") || "",
+          descending: order.getAttribute("descending") === "true"
+        }));
+        state.rootFilter = entityNode.querySelector(":scope > filter") ? parseFilterNode(entityNode.querySelector(":scope > filter")) : defaultFilter();
+        state.links = [];
+        for (const linkNode of [...entityNode.querySelectorAll(":scope > link-entity")]) await parseLinkNode(linkNode, null);
+
+        renderAll();
+        setTab("builder");
+        setStatus("FetchXML imported successfully", "ok");
+        toast("FetchXML imported");
       };
 
-      $("#fbAddCondition").onclick = () => {
-        if (!state.entity || !state.fields.length) {
-          alert("Select entity first.");
+      const runQuery = async () => {
+        if (!state.entity) {
+          alert("Select a table first.");
           return;
         }
 
-        state.conditions.push({
-          field: state.fields[0].logicalName,
-          operator: "eq",
-          value: ""
-        });
+        const xml = buildFetchXml();
+        const button = $("#fbRunButton");
+        button.disabled = true;
+        button.textContent = "Running...";
+        setStatus("Executing FetchXML...");
 
-        renderConditions();
+        try {
+          const started = performance.now();
+          const url = `${clientUrl}/api/data/${API_VERSION}/${state.entity.entitySetName}?fetchXml=${encodeURIComponent(xml)}`;
+          const data = await requestJson(url, { headers: { Prefer: 'odata.include-annotations="*"' } });
+          state.lastDuration = performance.now() - started;
+          state.lastResults = data?.value || [];
+          renderResults(data);
+          setTab("preview");
+          setStatus(`Query completed in ${Math.round(state.lastDuration)} ms`, "ok");
+        } catch (error) {
+          setStatus(error.message || String(error), "error");
+          alert(`FetchXML failed:\n${error.message || error}`);
+        } finally {
+          button.disabled = false;
+          button.textContent = "Run";
+        }
       };
 
-      $("#fbGenerate").onclick = buildFetchXml;
-
-      $("#fbCopy").onclick = async () => {
-        await navigator.clipboard.writeText(output.value);
+      const displayValue = (row, key) => {
+        const formatted = row[`${key}@OData.Community.Display.V1.FormattedValue`];
+        const value = formatted ?? row[key];
+        if (value === null || value === undefined) return "";
+        if (typeof value === "object") return JSON.stringify(value);
+        return String(value);
       };
 
+      const renderResults = (data) => {
+        const rows = state.lastResults;
+        const total = data?.["@Microsoft.Dynamics.CRM.totalrecordcount"];
+        resultSummary.textContent = `${rows.length} rows${typeof total === "number" && total >= 0 ? ` · total ${total}` : ""} · ${Math.round(state.lastDuration)} ms`;
+
+        if (!rows.length) {
+          resultTable.innerHTML = `<div class="fb-empty" style="margin:16px">The query returned no rows.</div>`;
+          return;
+        }
+
+        const keys = [...new Set(rows.flatMap((row) => Object.keys(row).filter((key) => !key.includes("@") && !key.startsWith("_transactioncurrencyid"))))];
+        resultTable.innerHTML = `
+          <table>
+            <thead><tr>${keys.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead>
+            <tbody>${rows.map((row) => `<tr>${keys.map((key) => `<td title="${escapeHtml(displayValue(row, key))}">${escapeHtml(displayValue(row, key))}</td>`).join("")}</tr>`).join("")}</tbody>
+          </table>
+        `;
+      };
+
+      const exportCsv = () => {
+        if (!state.lastResults.length) return;
+        const keys = [...new Set(state.lastResults.flatMap((row) => Object.keys(row).filter((key) => !key.includes("@"))))];
+        const csvEscape = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+        const csv = [
+          keys.map(csvEscape).join(","),
+          ...state.lastResults.map((row) => keys.map((key) => csvEscape(displayValue(row, key))).join(","))
+        ].join("\r\n");
+        const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${state.entity?.logicalName || "fetch-results"}.csv`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      };
+
+      const copyXml = async () => {
+        const xml = buildFetchXml();
+        if (!xml) return;
+        await navigator.clipboard.writeText(xml);
+        toast("FetchXML copied");
+      };
+
+      $$(".fb-tab").forEach((button) => button.onclick = () => setTab(button.dataset.tab));
+      $("#fbCloseButton").onclick = () => overlay.remove();
+      $("#fbCopyButton").onclick = copyXml;
+      $("#fbCopyXmlTab").onclick = copyXml;
+      $("#fbRunButton").onclick = runQuery;
+      $("#fbRunAgain").onclick = runQuery;
+      $("#fbExportCsv").onclick = exportCsv;
+      $("#fbParseImport").onclick = async () => {
+        try { await importFetchXml(); }
+        catch (error) { setStatus(error.message || String(error), "error"); alert(error.message || error); }
+      };
+      $("#fbImportButton").onclick = () => {
+        importInput.value = output.value;
+        setTab("xml");
+        importInput.focus();
+        importInput.select();
+      };
+      $("#fbClearColumns").onclick = () => {
+        state.selectedColumns = [];
+        renderFields();
+        renderSelectedColumns();
+        renderWorkspace();
+        updateXml();
+      };
+
+      entitySearch.oninput = renderEntities;
+      fieldSearch.oninput = renderFields;
+      $("#fbTop").oninput = (event) => { state.options.top = Number(event.target.value) || 0; updateXml(); };
+      $("#fbDistinct").onchange = (event) => { state.options.distinct = event.target.checked; updateXml(); };
+      $("#fbNoLock").onchange = (event) => { state.options.noLock = event.target.checked; updateXml(); };
+      $("#fbCount").onchange = (event) => { state.options.returnTotalRecordCount = event.target.checked; updateXml(); };
+      $("#fbPrimaryAlias").oninput = updateXml;
+
+      overlay.onclick = (event) => {
+        if (event.target === overlay) return;
+      };
+      document.addEventListener("keydown", function closeOnEscape(event) {
+        if (event.key === "Escape" && document.getElementById("__d365_fetch_builder")) {
+          overlay.remove();
+          document.removeEventListener("keydown", closeOnEscape);
+        }
+      });
+
+      renderAll();
       try {
         await loadEntities();
-      } catch (e) {
-        output.value = `Failed loading metadata:\n${e.message || e}`;
+      } catch (error) {
+        setStatus(`Failed loading metadata: ${error.message || error}`, "error");
       }
     }
   });
 });
+
+
+
+
+
 
 
 
@@ -14688,10 +15538,5 @@ document
       }
     });
   });
-
-
-
-
-
 
 
