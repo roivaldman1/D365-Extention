@@ -15540,3 +15540,100 @@ document
   });
 
 
+document.getElementById("openSolutions")?.addEventListener("click", async () => {
+  try {
+    const tab = await __d365GetActiveTab();
+
+    if (!tab?.id) {
+      alert("No active Dynamics 365 tab found.");
+      return;
+    }
+
+    const results = await chrome.scripting.executeScript({
+      target: {
+        tabId: tab.id,
+        allFrames: true
+      },
+      world: "MAIN",
+
+      func: async () => {
+        try {
+          const Xrm = window.Xrm;
+
+          if (!Xrm?.Utility?.getGlobalContext) {
+            return {
+              ok: false,
+              hasXrm: false
+            };
+          }
+
+          const clientUrl =
+            Xrm.Utility.getGlobalContext().getClientUrl();
+
+          const response = await fetch(
+            `${clientUrl}/api/data/v9.2/RetrieveCurrentOrganization(AccessType=@AccessType)?@AccessType=Microsoft.Dynamics.CRM.EndpointAccessType'Default'`,
+            {
+              method: "GET",
+              credentials: "same-origin",
+              headers: {
+                Accept: "application/json",
+                "OData-Version": "4.0",
+                "OData-MaxVersion": "4.0"
+              }
+            }
+          );
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const data = await response.json();
+
+          const environmentId =
+            data?.Detail?.EnvironmentId ||
+            data?.detail?.EnvironmentId ||
+            data?.EnvironmentId;
+
+          if (!environmentId) {
+            throw new Error("Environment ID not found.");
+          }
+
+          return {
+            ok: true,
+            hasXrm: true,
+            environmentId
+          };
+
+        } catch (error) {
+          return {
+            ok: false,
+            hasXrm: true,
+            message: error?.message || String(error)
+          };
+        }
+      }
+    });
+
+    const result = results.find(x => x.result?.hasXrm)?.result;
+
+    if (!result) {
+      alert("Dynamics 365 context not found.");
+      return;
+    }
+
+    if (!result.ok) {
+      alert(result.message || "Could not detect environment.");
+      return;
+    }
+
+    const url =
+      `https://make.powerapps.com/environments/${result.environmentId}/solutions`;
+
+    chrome.tabs.create({ url });
+
+  } catch (error) {
+    console.error("Open Solutions error:", error);
+    alert(error?.message || "Failed to open Solutions.");
+  }
+});
+
